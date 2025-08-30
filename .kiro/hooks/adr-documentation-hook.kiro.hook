@@ -1,0 +1,19 @@
+{
+  "enabled": true,
+  "name": "ADR Documentation Generator",
+  "description": "Automatically creates Architecture Decision Records (ADR) in Chinese when significant code changes are made to document technical choices, design decisions, and rationale for future reference",
+  "version": "1",
+  "when": {
+    "type": "fileEdited",
+    "patterns": [
+      "internal/**/*.go",
+      "pkg/**/*.go",
+      "cmd/**/*.go",
+      "docs/*.md"
+    ]
+  },
+  "then": {
+    "type": "askAgent",
+    "prompt": "请分析最近的代码变更，识别是否完成了一个复杂功能的开发。如果是，请用中文创建一个架构与设计决策记录(ADR)文档，包含以下内容：\n\n1. **功能概述** - 简要描述完成的功能\n2. **技术选择** - 列出关键的技术决策和选择的技术栈\n3. **架构设计** - 描述系统架构和组件设计\n4. **设计原理** - 解释重要设计决策背后的原因和考量\n5. **替代方案** - 提及考虑过但未采用的其他方案\n6. **影响和权衡** - 分析决策的影响和做出的权衡\n7. **未来考虑** - 对未来可能的改进或扩展的建议\n\n请将ADR文档保存到docs/目录下，文件名格式为：adr-YYYY-MM-DD-功能名称.md"
+  }
+}

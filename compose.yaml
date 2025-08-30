@@ -1,0 +1,71 @@
+version: '3.8'
+
+services:
+  # MinIO S3-compatible storage for testing
+  minio:
+    image: minio/minio:latest
+    container_name: s3-static-minio
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    command: server /data --console-address ":9001"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+  # MinIO client to create bucket
+  minio-setup:
+    image: minio/mc:latest
+    container_name: s3-static-minio-setup
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      /usr/bin/mc alias set myminio http://minio:9000 minioadmin minioadmin;
+      /usr/bin/mc mb myminio/static-files --ignore-existing;
+      /usr/bin/mc policy set public myminio/static-files;
+      echo 'MinIO setup completed';
+      "
+
+  # S3 Static File Service
+  s3-static:
+    build: .
+    container_name: s3-static-app
+    ports:
+      - "8080:8080"
+    environment:
+      - PORT=8080
+      - HOST=0.0.0.0
+      - LOG_LEVEL=info
+      - S3_ENDPOINT=minio:9000
+      - S3_REGION=us-east-1
+      - S3_ACCESS_KEY_ID=minioadmin
+      - S3_SECRET_ACCESS_KEY=minioadmin
+      - S3_USE_SSL=false
+      - BUCKET_NAME=static-files
+      - CACHE_DURATION=1h
+    depends_on:
+      minio-setup:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  minio_data:
+    driver: local
+
+networks:
+  default:
+    name: s3-static-network

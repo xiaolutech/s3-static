@@ -6,17 +6,10 @@
   "when": {
     "type": "fileEdited",
     "patterns": [
-      "**/*task*",
-      "**/*TODO*",
-      "**/*todo*",
-      "**/tasks/**",
+      "**/*tasks.md",
+      "**/*task*.md",
       "**/*.md",
-      "**/*.py",
-      "**/*.js",
-      "**/*.ts",
-      "**/*.java",
-      "**/*.cpp",
-      "**/*.c"
+      "**/*.go"
     ]
   },
   "then": {
