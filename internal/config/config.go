@@ -17,6 +17,13 @@ type Config struct {
 	BasePath   string `env:"BASE_PATH"`
 	BucketName string `env:"BUCKET_NAME"`
 
+	// S3 Storage configuration
+	S3Endpoint        string `env:"S3_ENDPOINT"`
+	S3Region          string `env:"S3_REGION"`
+	S3AccessKeyID     string `env:"S3_ACCESS_KEY_ID"`
+	S3SecretAccessKey string `env:"S3_SECRET_ACCESS_KEY"`
+	S3UseSSL          bool   `env:"S3_USE_SSL"`
+
 	// Cache configuration
 	DefaultCacheDuration time.Duration `env:"CACHE_DURATION"`
 
@@ -31,6 +38,8 @@ func DefaultConfig() *Config {
 		Host:                 "0.0.0.0",
 		BasePath:             "./data",
 		BucketName:           "default",
+		S3Region:             "us-east-1",
+		S3UseSSL:             true,
 		DefaultCacheDuration: time.Hour,
 		LogLevel:             "info",
 	}
@@ -55,6 +64,29 @@ func LoadFromEnv() (*Config, error) {
 	}
 	if logLevel := os.Getenv("LOG_LEVEL"); logLevel != "" {
 		config.LogLevel = logLevel
+	}
+
+	// Load S3 configuration
+	if s3Endpoint := os.Getenv("S3_ENDPOINT"); s3Endpoint != "" {
+		config.S3Endpoint = s3Endpoint
+	}
+	if s3Region := os.Getenv("S3_REGION"); s3Region != "" {
+		config.S3Region = s3Region
+	}
+	if s3AccessKeyID := os.Getenv("S3_ACCESS_KEY_ID"); s3AccessKeyID != "" {
+		config.S3AccessKeyID = s3AccessKeyID
+	}
+	if s3SecretAccessKey := os.Getenv("S3_SECRET_ACCESS_KEY"); s3SecretAccessKey != "" {
+		config.S3SecretAccessKey = s3SecretAccessKey
+	}
+
+	// Load boolean values
+	if s3UseSSLStr := os.Getenv("S3_USE_SSL"); s3UseSSLStr != "" {
+		useSSL, err := strconv.ParseBool(s3UseSSLStr)
+		if err != nil {
+			return nil, fmt.Errorf("invalid S3_USE_SSL format: %w", err)
+		}
+		config.S3UseSSL = useSSL
 	}
 
 	// Load duration value
@@ -113,10 +145,55 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("invalid log level: %s, must be one of: debug, info, warn, error, fatal", c.LogLevel)
 	}
 
+	// Validate S3 configuration if S3 endpoint is provided
+	if c.S3Endpoint != "" {
+		if c.S3AccessKeyID == "" {
+			return fmt.Errorf("S3_ACCESS_KEY_ID is required when S3_ENDPOINT is provided")
+		}
+		if c.S3SecretAccessKey == "" {
+			return fmt.Errorf("S3_SECRET_ACCESS_KEY is required when S3_ENDPOINT is provided")
+		}
+		if c.S3Region == "" {
+			return fmt.Errorf("S3_REGION is required when S3_ENDPOINT is provided")
+		}
+	}
+
 	return nil
 }
 
 // GetAddress returns the full address for the HTTP server
 func (c *Config) GetAddress() string {
 	return c.Host + ":" + c.Port
+}
+
+// GetS3Config returns S3 configuration from the main config
+func (c *Config) GetS3Config() *S3Config {
+	return &S3Config{
+		Endpoint:        c.S3Endpoint,
+		AccessKeyID:     c.S3AccessKeyID,
+		SecretAccessKey: c.S3SecretAccessKey,
+		UseSSL:          c.S3UseSSL,
+		Region:          c.S3Region,
+		BucketName:      c.BucketName,
+	}
+}
+
+// S3Config holds S3-specific configuration
+type S3Config struct {
+	Endpoint        string
+	AccessKeyID     string
+	SecretAccessKey string
+	UseSSL          bool
+	Region          string
+	BucketName      string
+}
+
+// IsS3Enabled returns true if S3 configuration is provided
+func (c *Config) IsS3Enabled() bool {
+	return c.S3Endpoint != ""
+}
+
+// Load loads configuration from environment variables
+func Load() (*Config, error) {
+	return LoadFromEnv()
 }

@@ -18,9 +18,7 @@
 graph TB
     Client[客户端] --> Router[HTTP 路由器]
     Router --> Handler[文件处理器]
-    Handler --> Cache[缓存管理器]
     Handler --> Storage[存储层]
-    Cache --> ETag[ETag 生成器]
     Storage --> S3Backend[S3 兼容存储]
     
     subgraph "配置层"
@@ -38,22 +36,19 @@ graph TB
 sequenceDiagram
     participant C as 客户端
     participant H as HTTP处理器
-    participant CM as 缓存管理器
     participant S3 as S3存储
     
     C->>H: GET /path/to/file
-    H->>CM: 检查条件请求头
-    CM->>S3: 获取对象元数据 (HeadObject)
-    S3-->>CM: 返回修改时间/大小/ETag
-    CM->>CM: 验证 ETag
+    H->>H: 检查条件请求头
+    H->>S3: 获取对象元数据 (HeadObject)
+    S3-->>H: 返回修改时间/大小/ETag
+    H->>H: 生成并验证 ETag
     
     alt 对象未变更
-        CM-->>H: 304 Not Modified
-        H-->>C: 304 响应
+        H-->>C: 304 Not Modified
     else 对象已变更或首次请求
-        CM->>S3: 读取对象内容 (GetObject)
-        S3-->>CM: 返回对象数据
-        CM-->>H: 对象内容 + ETag
+        H->>S3: 读取对象内容 (GetObject)
+        S3-->>H: 返回对象数据
         H-->>C: 200 响应 + 缓存头
     end
 ```
@@ -72,9 +67,9 @@ type Server struct {
 }
 
 type FileHandler struct {
-    cacheManager *CacheManager
-    storage      *Storage
-    config       *Config
+    storage *Storage
+    config  *Config
+    logger  *Logger
 }
 ```
 
@@ -82,28 +77,11 @@ type FileHandler struct {
 - `ServeHTTP(w http.ResponseWriter, r *http.Request)`
 - `handleGetObject(w http.ResponseWriter, r *http.Request)`
 - `handleHealthCheck(w http.ResponseWriter, r *http.Request)`
+- `generateETag(modTime time.Time, size int64) string`
+- `checkConditionalRequest(r *http.Request, etag string, modTime time.Time) bool`
+- `setCacheHeaders(w http.ResponseWriter, etag string, modTime time.Time)`
 
-### 2. 缓存管理组件
-
-**职责：** ETag 生成、条件请求处理、缓存头设置
-
-```go
-type CacheManager struct {
-    defaultCacheDuration time.Duration
-}
-
-type ETagGenerator interface {
-    Generate(filePath string, modTime time.Time, size int64) string
-    Validate(etag string, filePath string, modTime time.Time, size int64) bool
-}
-```
-
-**接口：**
-- `GenerateETag(filePath string, fileInfo os.FileInfo) string`
-- `CheckConditionalRequest(r *http.Request, etag string, modTime time.Time) bool`
-- `SetCacheHeaders(w http.ResponseWriter, etag string, modTime time.Time)`
-
-### 3. 存储层组件
+### 2. 存储层组件
 
 **职责：** S3 兼容存储访问、对象元数据获取
 
@@ -127,17 +105,22 @@ type FileInfo struct {
 - `ReadFile(path string) ([]byte, error)`
 - `FileExists(path string) bool`
 
-### 4. 配置管理组件
+### 3. 配置管理组件
 
 **职责：** 配置加载、环境变量处理
 
 ```go
 type Config struct {
-    Port                string
-    BasePath           string
+    Port                 string
+    Host                 string
     DefaultCacheDuration time.Duration
-    BucketName         string
-    LogLevel           string
+    BucketName          string
+    LogLevel            string
+    S3Endpoint          string
+    S3Region            string
+    S3AccessKeyID       string
+    S3SecretAccessKey   string
+    S3UseSSL            bool
 }
 ```
 
@@ -229,20 +212,18 @@ type ServiceError struct {
 
 ### 单元测试
 
-1. **缓存管理器测试**
+1. **HTTP 处理器测试**
+   - 路由处理正确性
    - ETag 生成算法验证
    - 条件请求处理逻辑
    - 缓存头设置正确性
+   - 响应格式验证
+   - 错误响应测试
 
 2. **存储层测试**
    - S3 对象读取功能
    - S3 对象信息获取
    - S3 错误场景处理
-
-3. **HTTP 处理器测试**
-   - 路由处理正确性
-   - 响应格式验证
-   - 错误响应测试
 
 ### 集成测试
 
