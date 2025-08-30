@@ -6,10 +6,9 @@
   "when": {
     "type": "fileEdited",
     "patterns": [
-      "**/*task*",
-      "**/*Task*",
-      "**/tasks/**",
-      "**/task/**"
+      "**/*tasks.md",
+      "**/*task*.md",
+      "**/*.go"
     ]
   },
   "then": {

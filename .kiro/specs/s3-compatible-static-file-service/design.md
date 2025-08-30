@@ -21,7 +21,7 @@ graph TB
     Handler --> Cache[缓存管理器]
     Handler --> Storage[存储层]
     Cache --> ETag[ETag 生成器]
-    Storage --> FileSystem[本地文件系统]
+    Storage --> S3Backend[S3 兼容存储]
     
     subgraph "配置层"
         Config[配置管理]
@@ -39,21 +39,21 @@ sequenceDiagram
     participant C as 客户端
     participant H as HTTP处理器
     participant CM as 缓存管理器
-    participant FS as 文件系统
+    participant S3 as S3存储
     
     C->>H: GET /path/to/file
     H->>CM: 检查条件请求头
-    CM->>FS: 获取文件元数据
-    FS-->>CM: 返回修改时间/大小
-    CM->>CM: 生成/验证 ETag
+    CM->>S3: 获取对象元数据 (HeadObject)
+    S3-->>CM: 返回修改时间/大小/ETag
+    CM->>CM: 验证 ETag
     
-    alt 文件未变更
+    alt 对象未变更
         CM-->>H: 304 Not Modified
         H-->>C: 304 响应
-    else 文件已变更或首次请求
-        CM->>FS: 读取文件内容
-        FS-->>CM: 返回文件数据
-        CM-->>H: 文件内容 + 新ETag
+    else 对象已变更或首次请求
+        CM->>S3: 读取对象内容 (GetObject)
+        S3-->>CM: 返回对象数据
+        CM-->>H: 对象内容 + ETag
         H-->>C: 200 响应 + 缓存头
     end
 ```
@@ -105,11 +105,12 @@ type ETagGenerator interface {
 
 ### 3. 存储层组件
 
-**职责：** 文件系统访问、文件元数据获取
+**职责：** S3 兼容存储访问、对象元数据获取
 
 ```go
-type Storage struct {
-    basePath string
+type S3Storage struct {
+    client     *s3.Client
+    bucketName string
 }
 
 type FileInfo struct {
@@ -117,6 +118,7 @@ type FileInfo struct {
     Size     int64
     ModTime  time.Time
     IsDir    bool
+    ETag     string
 }
 ```
 
@@ -149,9 +151,13 @@ type ServerConfig struct {
     Port     string `env:"PORT" default:"8080"`
     Host     string `env:"HOST" default:"0.0.0.0"`
     
-    // 存储配置
-    BasePath   string `env:"BASE_PATH" default:"./data"`
-    BucketName string `env:"BUCKET_NAME" default:"default"`
+    // S3 存储配置
+    S3Endpoint        string `env:"S3_ENDPOINT"`
+    S3Region          string `env:"S3_REGION" default:"us-east-1"`
+    S3AccessKeyID     string `env:"S3_ACCESS_KEY_ID"`
+    S3SecretAccessKey string `env:"S3_SECRET_ACCESS_KEY"`
+    S3UseSSL          bool   `env:"S3_USE_SSL" default:"true"`
+    BucketName        string `env:"BUCKET_NAME" default:"default"`
     
     // 缓存配置
     DefaultCacheDuration time.Duration `env:"CACHE_DURATION" default:"1h"`
@@ -229,9 +235,9 @@ type ServiceError struct {
    - 缓存头设置正确性
 
 2. **存储层测试**
-   - 文件读取功能
-   - 文件信息获取
-   - 错误场景处理
+   - S3 对象读取功能
+   - S3 对象信息获取
+   - S3 错误场景处理
 
 3. **HTTP 处理器测试**
    - 路由处理正确性
@@ -289,12 +295,12 @@ type TestSuite struct {
 
 ### 并发处理
 
-1. **文件系统访问优化**
-   - 使用 Go 的并发安全文件操作
-   - 避免文件锁竞争
-   - 合理的 goroutine 池管理
+1. **S3 访问优化**
+   - 使用 S3 客户端的并发安全操作
+   - 合理的连接池管理
+   - 适当的重试和超时策略
 
 2. **内存使用优化**
-   - 大文件流式传输
-   - 避免将整个文件加载到内存
+   - 大对象流式传输
+   - 避免将整个对象加载到内存
    - 合理的缓冲区大小设置
