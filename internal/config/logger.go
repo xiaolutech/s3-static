@@ -26,7 +26,7 @@ type Logger struct {
 // NewLogger creates a new logger with the specified level
 func NewLogger(levelStr string) *Logger {
 	level := parseLogLevel(levelStr)
-	
+
 	var slogLevel slog.Level
 	switch level {
 	case LogLevelDebug:
@@ -106,7 +106,7 @@ func (l *Logger) WithFields(fields map[string]any) *Logger {
 	for k, v := range fields {
 		args = append(args, k, v)
 	}
-	
+
 	newLogger := l.Logger.With(args...)
 	return &Logger{
 		Logger: newLogger,

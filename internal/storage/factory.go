@@ -8,6 +8,11 @@ import (
 
 // NewStorage creates a new storage instance based on configuration
 func NewStorage(cfg *config.Config) (interfaces.Storage, error) {
+	// Validate configuration first
+	if err := cfg.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid configuration: %w", err)
+	}
+
 	if cfg.IsS3Enabled() {
 		// Create S3 storage
 		s3Config := S3Config{
@@ -18,15 +23,15 @@ func NewStorage(cfg *config.Config) (interfaces.Storage, error) {
 			Region:          cfg.S3Region,
 			Bucket:          cfg.BucketName,
 		}
-		
+
 		storage, err := NewS3Storage(s3Config)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create S3 storage: %w", err)
 		}
-		
+
 		return storage, nil
 	}
-	
+
 	// For now, return an error if S3 is not configured
 	// In the future, we could add local file storage as fallback
 	return nil, fmt.Errorf("no storage backend configured - S3_ENDPOINT is required")

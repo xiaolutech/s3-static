@@ -1,0 +1,48 @@
+# Git
+.git
+.gitignore
+
+# Documentation
+README.md
+docs/
+
+# Test files
+*_test.go
+test_utils.go
+coverage.out
+coverage.html
+*.prof
+
+# Build artifacts
+s3-static
+s3-static-*
+*.exe
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.temp
+
+# Logs
+*.log
+
+# Test containers
+.testcontainers/
+
+# Examples (optional, include if needed)
+examples/
+
+# Scripts (optional, include if needed)
+scripts/
+
+# Kiro configuration
+.kiro/

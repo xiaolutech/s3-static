@@ -83,8 +83,6 @@ func (h *FileHandler) handleGetObject(w http.ResponseWriter, r *http.Request) {
 	)
 }
 
-
-
 // checkConditionalRequest checks if the request should return 304 Not Modified
 func (h *FileHandler) checkConditionalRequest(r *http.Request, etag string, modTime time.Time) bool {
 	// Check If-None-Match header
@@ -117,17 +115,17 @@ func (h *FileHandler) setS3Headers(w http.ResponseWriter, etag string, modTime t
 	w.Header().Set("x-amz-request-id", h.generateRequestID())
 	w.Header().Set("x-amz-id-2", h.generateRequestID2())
 	w.Header().Set("Server", "S3-Static/1.0")
-	
+
 	// 缓存相关头
 	w.Header().Set("ETag", `"`+etag+`"`)
 	w.Header().Set("Last-Modified", modTime.UTC().Format(http.TimeFormat))
 	w.Header().Set("Cache-Control", fmt.Sprintf("max-age=%d", int(h.config.DefaultCacheDuration.Seconds())))
-	
+
 	// 内容相关头
 	w.Header().Set("Content-Length", strconv.FormatInt(size, 10))
 	w.Header().Set("Content-Type", h.getContentType(path))
 	w.Header().Set("Accept-Ranges", "bytes")
-	
+
 	// CORS 支持（如果需要）
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Access-Control-Allow-Methods", "GET, HEAD")
@@ -141,7 +139,7 @@ func (h *FileHandler) getContentType(path string) string {
 	if !strings.Contains(path, ".") {
 		return "application/octet-stream"
 	}
-	
+
 	// Simple content type detection based on file extension
 	ext := strings.ToLower(path[strings.LastIndex(path, ".")+1:])
 	switch ext {
@@ -204,16 +202,16 @@ func (h *FileHandler) writeErrorResponse(w http.ResponseWriter, statusCode int, 
 	w.Header().Set("Content-Type", "application/xml")
 	w.Header().Set("x-amz-request-id", h.generateRequestID())
 	w.Header().Set("x-amz-id-2", h.generateRequestID2())
-	
+
 	w.WriteHeader(statusCode)
-	
+
 	errorXML := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
 <Error>
     <Code>%s</Code>
     <Message>%s</Message>
     <RequestId>%s</RequestId>
 </Error>`, code, message, h.generateRequestID())
-	
+
 	w.Write([]byte(errorXML))
 }
 

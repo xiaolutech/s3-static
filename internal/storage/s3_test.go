@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	testBucket = "test-bucket"
+	testBucket    = "test-bucket"
 	testAccessKey = "minioadmin"
 	testSecretKey = "minioadmin"
 )
@@ -277,7 +277,7 @@ func TestS3Storage_ErrorHandling(t *testing.T) {
 		}
 
 		endpoint := fmt.Sprintf("%s:%s", host, port.Port())
-		
+
 		cfg := S3Config{
 			Endpoint:        endpoint,
 			Region:          "us-east-1",
@@ -312,7 +312,7 @@ func TestS3Storage_ErrorHandling(t *testing.T) {
 		}
 
 		endpoint := fmt.Sprintf("%s:%s", host, port.Port())
-		
+
 		cfg := S3Config{
 			Endpoint:        endpoint,
 			Region:          "us-east-1",
@@ -410,4 +410,3 @@ func TestS3Storage_HTTPStatusMapping(t *testing.T) {
 		}
 	}
 }
-

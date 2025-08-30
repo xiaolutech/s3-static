@@ -17,10 +17,10 @@ type FileInfo struct {
 type Storage interface {
 	// GetFileInfo retrieves file metadata for the given path
 	GetFileInfo(path string) (*FileInfo, error)
-	
+
 	// ReadFile reads the entire file content
 	ReadFile(path string) ([]byte, error)
-	
+
 	// FileExists checks if a file exists at the given path
 	FileExists(path string) bool
 }

@@ -61,7 +61,7 @@ func NewS3Storage(cfg S3Config) (*S3Storage, error) {
 func (s *S3Storage) GetFileInfo(path string) (*interfaces.FileInfo, error) {
 	// Remove leading slash if present
 	key := strings.TrimPrefix(path, "/")
-	
+
 	ctx := context.Background()
 	objInfo, err := s.client.StatObject(ctx, s.bucket, key, minio.StatObjectOptions{})
 	if err != nil {
@@ -72,7 +72,7 @@ func (s *S3Storage) GetFileInfo(path string) (*interfaces.FileInfo, error) {
 		Path:    path,
 		Size:    objInfo.Size,
 		ModTime: objInfo.LastModified,
-		IsDir:   false, // S3 objects are always files
+		IsDir:   false,                           // S3 objects are always files
 		ETag:    strings.Trim(objInfo.ETag, `"`), // Remove quotes from ETag
 	}, nil
 }
@@ -81,7 +81,7 @@ func (s *S3Storage) GetFileInfo(path string) (*interfaces.FileInfo, error) {
 func (s *S3Storage) ReadFile(path string) ([]byte, error) {
 	// Remove leading slash if present
 	key := strings.TrimPrefix(path, "/")
-	
+
 	ctx := context.Background()
 	object, err := s.client.GetObject(ctx, s.bucket, key, minio.GetObjectOptions{})
 	if err != nil {
@@ -101,7 +101,7 @@ func (s *S3Storage) ReadFile(path string) ([]byte, error) {
 func (s *S3Storage) FileExists(path string) bool {
 	// Remove leading slash if present
 	key := strings.TrimPrefix(path, "/")
-	
+
 	ctx := context.Background()
 	_, err := s.client.StatObject(ctx, s.bucket, key, minio.StatObjectOptions{})
 	return err == nil

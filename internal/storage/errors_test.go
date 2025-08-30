@@ -148,7 +148,7 @@ func TestMapMinIOError(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			err := MapMinIOError(tt.inputErr, tt.path)
-			
+
 			if tt.inputErr == nil {
 				if err != nil {
 					t.Errorf("MapMinIOError() should return nil for nil input, got %v", err)
@@ -249,4 +249,3 @@ func TestIsForbidden(t *testing.T) {
 		})
 	}
 }
-

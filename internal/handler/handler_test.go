@@ -145,7 +145,7 @@ func TestFileHandler_CheckConditionalRequest(t *testing.T) {
 
 			result := handler.checkConditionalRequest(req, etag, modTime)
 			if result != tt.expected {
-				t.Errorf("Test '%s': Expected %v, got %v. ModTime: %v, Headers: %v", 
+				t.Errorf("Test '%s': Expected %v, got %v. ModTime: %v, Headers: %v",
 					tt.name, tt.expected, result, modTime, tt.headers)
 			}
 		})
@@ -327,8 +327,6 @@ func TestFileHandler_GetContentType(t *testing.T) {
 		})
 	}
 }
-
-
 
 func TestFileHandler_SetS3Headers(t *testing.T) {
 	cfg := config.DefaultConfig()

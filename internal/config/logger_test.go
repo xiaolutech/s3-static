@@ -25,7 +25,7 @@ func TestParseLogLevel(t *testing.T) {
 		{"fatal", LogLevelFatal},
 		{"FATAL", LogLevelFatal},
 		{"invalid", LogLevelInfo}, // default to info
-		{"", LogLevelInfo},         // default to info
+		{"", LogLevelInfo},        // default to info
 	}
 
 	for _, tt := range tests {
@@ -51,14 +51,14 @@ func TestNewLogger(t *testing.T) {
 func TestLoggerLevels(t *testing.T) {
 	// Capture output
 	var buf bytes.Buffer
-	
+
 	// Create a logger that writes to our buffer
 	opts := &slog.HandlerOptions{
 		Level: slog.LevelDebug,
 	}
 	handler := slog.NewJSONHandler(&buf, opts)
 	slogLogger := slog.New(handler)
-	
+
 	logger := &Logger{
 		Logger: slogLogger,
 		level:  LogLevelDebug,
@@ -71,7 +71,7 @@ func TestLoggerLevels(t *testing.T) {
 	logger.Error("error message")
 
 	output := buf.String()
-	
+
 	// Check that all messages were logged
 	if !strings.Contains(output, "debug message") {
 		t.Error("Debug message not found in output")
@@ -89,13 +89,13 @@ func TestLoggerLevels(t *testing.T) {
 
 func TestLoggerWithFields(t *testing.T) {
 	var buf bytes.Buffer
-	
+
 	opts := &slog.HandlerOptions{
 		Level: slog.LevelDebug,
 	}
 	handler := slog.NewJSONHandler(&buf, opts)
 	slogLogger := slog.New(handler)
-	
+
 	logger := &Logger{
 		Logger: slogLogger,
 		level:  LogLevelInfo,
@@ -105,12 +105,12 @@ func TestLoggerWithFields(t *testing.T) {
 		"user_id": "123",
 		"action":  "login",
 	}
-	
+
 	fieldLogger := logger.WithFields(fields)
 	fieldLogger.Info("User action")
 
 	output := buf.String()
-	
+
 	// Parse JSON to verify fields are present
 	var logEntry map[string]any
 	lines := strings.Split(strings.TrimSpace(output), "\n")
@@ -119,7 +119,7 @@ func TestLoggerWithFields(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Failed to parse log JSON: %v", err)
 		}
-		
+
 		if logEntry["user_id"] != "123" {
 			t.Error("user_id field not found or incorrect")
 		}
@@ -131,13 +131,13 @@ func TestLoggerWithFields(t *testing.T) {
 
 func TestLogRequest(t *testing.T) {
 	var buf bytes.Buffer
-	
+
 	opts := &slog.HandlerOptions{
 		Level: slog.LevelDebug,
 	}
 	handler := slog.NewJSONHandler(&buf, opts)
 	slogLogger := slog.New(handler)
-	
+
 	logger := &Logger{
 		Logger: slogLogger,
 		level:  LogLevelInfo,
@@ -146,7 +146,7 @@ func TestLogRequest(t *testing.T) {
 	logger.LogRequest("GET", "/test/path", "192.168.1.1", 200, "10ms")
 
 	output := buf.String()
-	
+
 	// Parse JSON to verify request fields are present
 	var logEntry map[string]any
 	lines := strings.Split(strings.TrimSpace(output), "\n")
@@ -155,7 +155,7 @@ func TestLogRequest(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Failed to parse log JSON: %v", err)
 		}
-		
+
 		expectedFields := map[string]any{
 			"method":      "GET",
 			"path":        "/test/path",
@@ -163,7 +163,7 @@ func TestLogRequest(t *testing.T) {
 			"status_code": float64(200), // JSON numbers are float64
 			"duration":    "10ms",
 		}
-		
+
 		for field, expectedValue := range expectedFields {
 			if logEntry[field] != expectedValue {
 				t.Errorf("Field %s: expected %v, got %v", field, expectedValue, logEntry[field])
@@ -174,13 +174,13 @@ func TestLogRequest(t *testing.T) {
 
 func TestLogError(t *testing.T) {
 	var buf bytes.Buffer
-	
+
 	opts := &slog.HandlerOptions{
 		Level: slog.LevelDebug,
 	}
 	handler := slog.NewJSONHandler(&buf, opts)
 	slogLogger := slog.New(handler)
-	
+
 	logger := &Logger{
 		Logger: slogLogger,
 		level:  LogLevelInfo,
@@ -191,11 +191,11 @@ func TestLogError(t *testing.T) {
 		"file": "test.go",
 		"line": 42,
 	}
-	
+
 	logger.LogError(testErr, context)
 
 	output := buf.String()
-	
+
 	// Parse JSON to verify error fields are present
 	var logEntry map[string]any
 	lines := strings.Split(strings.TrimSpace(output), "\n")
@@ -204,7 +204,7 @@ func TestLogError(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Failed to parse log JSON: %v", err)
 		}
-		
+
 		if logEntry["error"] != "test error occurred" {
 			t.Errorf("Error message not found or incorrect: %v", logEntry["error"])
 		}
@@ -237,13 +237,13 @@ func (e *testError) Error() string {
 // We'll test the behavior without actually exiting
 func TestFatalLogging(t *testing.T) {
 	var buf bytes.Buffer
-	
+
 	opts := &slog.HandlerOptions{
 		Level: slog.LevelDebug,
 	}
 	handler := slog.NewJSONHandler(&buf, opts)
 	slogLogger := slog.New(handler)
-	
+
 	logger := &Logger{
 		Logger: slogLogger,
 		level:  LogLevelFatal,

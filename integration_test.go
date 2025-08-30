@@ -1,0 +1,366 @@
+package main
+
+import (
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+)
+
+func TestIntegration_FileServing(t *testing.T) {
+	suite := SetupTestSuite(t)
+	defer suite.Cleanup()
+
+	// Upload test files
+	testFiles := map[string]string{
+		"test.txt":           "Hello, World!",
+		"folder/nested.html": "<html><body>Nested file</body></html>",
+		"image.png":          "fake-png-data",
+		"style.css":          "body { color: red; }",
+		"script.js":          "console.log('test');",
+	}
+
+	for path, content := range testFiles {
+		err := suite.UploadTestFile(path, content)
+		if err != nil {
+			t.Fatalf("Failed to upload test file %s: %v", path, err)
+		}
+	}
+
+	// Test file serving
+	for path, expectedContent := range testFiles {
+		t.Run("serve_"+path, func(t *testing.T) {
+			req := suite.CreateTestRequest("GET", "/"+path, nil)
+			w := suite.ExecuteRequest(req)
+
+			suite.AssertStatusCode(t, w, http.StatusOK)
+			suite.AssertBodyEquals(t, w, expectedContent)
+			suite.AssertHeaderExists(t, w, "ETag")
+			suite.AssertHeaderExists(t, w, "Last-Modified")
+			suite.AssertHeaderExists(t, w, "Cache-Control")
+			suite.AssertHeaderExists(t, w, "Content-Type")
+		})
+	}
+}
+
+func TestIntegration_ConditionalRequests(t *testing.T) {
+	suite := SetupTestSuite(t)
+	defer suite.Cleanup()
+
+	// Upload test file
+	testContent := "Test content for conditional requests"
+	err := suite.UploadTestFile("conditional.txt", testContent)
+	if err != nil {
+		t.Fatalf("Failed to upload test file: %v", err)
+	}
+
+	// First request to get ETag and Last-Modified
+	req := suite.CreateTestRequest("GET", "/conditional.txt", nil)
+	w := suite.ExecuteRequest(req)
+	suite.AssertStatusCode(t, w, http.StatusOK)
+
+	etag := w.Header().Get("ETag")
+	lastModified := w.Header().Get("Last-Modified")
+
+	// Test If-None-Match with matching ETag
+	t.Run("if_none_match_matching", func(t *testing.T) {
+		req := suite.CreateTestRequest("GET", "/conditional.txt", nil)
+		req.Header.Set("If-None-Match", etag)
+		w := suite.ExecuteRequest(req)
+
+		suite.AssertStatusCode(t, w, http.StatusNotModified)
+		if w.Body.Len() != 0 {
+			t.Error("Expected empty body for 304 response")
+		}
+	})
+
+	// Test If-None-Match with non-matching ETag
+	t.Run("if_none_match_non_matching", func(t *testing.T) {
+		req := suite.CreateTestRequest("GET", "/conditional.txt", nil)
+		req.Header.Set("If-None-Match", `"different-etag"`)
+		w := suite.ExecuteRequest(req)
+
+		suite.AssertStatusCode(t, w, http.StatusOK)
+		suite.AssertBodyEquals(t, w, testContent)
+	})
+
+	// Test If-Modified-Since with future date
+	t.Run("if_modified_since_future", func(t *testing.T) {
+		futureTime := time.Now().Add(time.Hour).UTC().Format(http.TimeFormat)
+		req := suite.CreateTestRequest("GET", "/conditional.txt", nil)
+		req.Header.Set("If-Modified-Since", futureTime)
+		w := suite.ExecuteRequest(req)
+
+		suite.AssertStatusCode(t, w, http.StatusNotModified)
+	})
+
+	// Test If-Modified-Since with past date
+	t.Run("if_modified_since_past", func(t *testing.T) {
+		pastTime := time.Now().Add(-time.Hour).UTC().Format(http.TimeFormat)
+		req := suite.CreateTestRequest("GET", "/conditional.txt", nil)
+		req.Header.Set("If-Modified-Since", pastTime)
+		w := suite.ExecuteRequest(req)
+
+		suite.AssertStatusCode(t, w, http.StatusOK)
+		suite.AssertBodyEquals(t, w, testContent)
+	})
+
+	// Test If-Modified-Since with same time as Last-Modified
+	t.Run("if_modified_since_same", func(t *testing.T) {
+		req := suite.CreateTestRequest("GET", "/conditional.txt", nil)
+		req.Header.Set("If-Modified-Since", lastModified)
+		w := suite.ExecuteRequest(req)
+
+		suite.AssertStatusCode(t, w, http.StatusNotModified)
+	})
+}
+
+func TestIntegration_ContentTypes(t *testing.T) {
+	suite := SetupTestSuite(t)
+	defer suite.Cleanup()
+
+	// Test files with different extensions
+	testFiles := map[string]struct {
+		content     string
+		contentType string
+	}{
+		"test.html":    {"<html></html>", "text/html"},
+		"test.css":     {"body{}", "text/css"},
+		"test.js":      {"console.log()", "application/javascript"},
+		"test.json":    {`{"key":"value"}`, "application/json"},
+		"test.txt":     {"plain text", "text/plain"},
+		"test.xml":     {"<xml></xml>", "application/xml"},
+		"test.png":     {"fake-png", "image/png"},
+		"test.jpg":     {"fake-jpg", "image/jpeg"},
+		"test.gif":     {"fake-gif", "image/gif"},
+		"test.svg":     {"<svg></svg>", "image/svg+xml"},
+		"test.pdf":     {"fake-pdf", "application/pdf"},
+		"test.zip":     {"fake-zip", "application/zip"},
+		"test.unknown": {"unknown", "application/octet-stream"},
+		"noextension":  {"no ext", "application/octet-stream"},
+	}
+
+	for path, fileData := range testFiles {
+		err := suite.UploadTestFile(path, fileData.content)
+		if err != nil {
+			t.Fatalf("Failed to upload test file %s: %v", path, err)
+		}
+	}
+
+	for path, fileData := range testFiles {
+		t.Run("content_type_"+path, func(t *testing.T) {
+			req := suite.CreateTestRequest("GET", "/"+path, nil)
+			w := suite.ExecuteRequest(req)
+
+			suite.AssertStatusCode(t, w, http.StatusOK)
+			suite.AssertHeader(t, w, "Content-Type", fileData.contentType)
+		})
+	}
+}
+
+func TestIntegration_S3Headers(t *testing.T) {
+	suite := SetupTestSuite(t)
+	defer suite.Cleanup()
+
+	// Upload test file
+	err := suite.UploadTestFile("s3headers.txt", "Test S3 headers")
+	if err != nil {
+		t.Fatalf("Failed to upload test file: %v", err)
+	}
+
+	req := suite.CreateTestRequest("GET", "/s3headers.txt", nil)
+	w := suite.ExecuteRequest(req)
+
+	suite.AssertStatusCode(t, w, http.StatusOK)
+
+	// Check S3-specific headers
+	suite.AssertHeaderExists(t, w, "x-amz-request-id")
+	suite.AssertHeaderExists(t, w, "x-amz-id-2")
+	suite.AssertHeader(t, w, "Server", "S3-Static/1.0")
+	suite.AssertHeader(t, w, "Accept-Ranges", "bytes")
+
+	// Check CORS headers
+	suite.AssertHeader(t, w, "Access-Control-Allow-Origin", "*")
+	suite.AssertHeader(t, w, "Access-Control-Allow-Methods", "GET, HEAD")
+	suite.AssertHeader(t, w, "Access-Control-Allow-Headers", "Range")
+	suite.AssertHeaderExists(t, w, "Access-Control-Expose-Headers")
+}
+
+func TestIntegration_ErrorHandling(t *testing.T) {
+	suite := SetupTestSuite(t)
+	defer suite.Cleanup()
+
+	// Test file not found
+	t.Run("file_not_found", func(t *testing.T) {
+		req := suite.CreateTestRequest("GET", "/nonexistent.txt", nil)
+		w := suite.ExecuteRequest(req)
+
+		suite.AssertStatusCode(t, w, http.StatusInternalServerError)
+		suite.AssertHeader(t, w, "Content-Type", "application/xml")
+		suite.AssertBodyContains(t, w, "<Error>")
+		suite.AssertBodyContains(t, w, "<Code>")
+		suite.AssertBodyContains(t, w, "<Message>")
+	})
+
+	// Test empty path
+	t.Run("empty_path", func(t *testing.T) {
+		req := suite.CreateTestRequest("GET", "/", nil)
+		w := suite.ExecuteRequest(req)
+
+		suite.AssertStatusCode(t, w, http.StatusBadRequest)
+		suite.AssertBodyContains(t, w, "InvalidRequest")
+	})
+
+	// Test method not allowed
+	t.Run("method_not_allowed", func(t *testing.T) {
+		req := suite.CreateTestRequest("POST", "/test.txt", nil)
+		w := suite.ExecuteRequest(req)
+
+		suite.AssertStatusCode(t, w, http.StatusMethodNotAllowed)
+		suite.AssertBodyContains(t, w, "MethodNotAllowed")
+	})
+}
+
+func TestIntegration_CacheHeaders(t *testing.T) {
+	suite := SetupTestSuite(t)
+	defer suite.Cleanup()
+
+	// Upload test file
+	err := suite.UploadTestFile("cache.txt", "Cache test content")
+	if err != nil {
+		t.Fatalf("Failed to upload test file: %v", err)
+	}
+
+	req := suite.CreateTestRequest("GET", "/cache.txt", nil)
+	w := suite.ExecuteRequest(req)
+
+	suite.AssertStatusCode(t, w, http.StatusOK)
+
+	// Check cache headers
+	cacheControl := w.Header().Get("Cache-Control")
+	if !strings.Contains(cacheControl, "max-age=") {
+		t.Errorf("Expected Cache-Control to contain max-age, got: %s", cacheControl)
+	}
+
+	etag := w.Header().Get("ETag")
+	if etag == "" {
+		t.Error("Expected ETag header to be set")
+	}
+
+	// ETag should be quoted
+	if !strings.HasPrefix(etag, `"`) || !strings.HasSuffix(etag, `"`) {
+		t.Errorf("Expected ETag to be quoted, got: %s", etag)
+	}
+
+	lastModified := w.Header().Get("Last-Modified")
+	if lastModified == "" {
+		t.Error("Expected Last-Modified header to be set")
+	}
+
+	// Parse Last-Modified to ensure it's valid
+	_, err = http.ParseTime(lastModified)
+	if err != nil {
+		t.Errorf("Invalid Last-Modified format: %s", lastModified)
+	}
+}
+
+func TestIntegration_PathHandling(t *testing.T) {
+	suite := SetupTestSuite(t)
+	defer suite.Cleanup()
+
+	// Upload files with different path patterns
+	testPaths := []string{
+		"simple.txt",
+		"folder/nested.txt",
+		"deep/folder/structure/file.txt",
+		"with-dashes.txt",
+		"with_underscores.txt",
+		"with.dots.txt",
+	}
+
+	for _, path := range testPaths {
+		content := "Content for " + path
+		err := suite.UploadTestFile(path, content)
+		if err != nil {
+			t.Fatalf("Failed to upload test file %s: %v", path, err)
+		}
+	}
+
+	// Test accessing files with different path formats
+	for _, path := range testPaths {
+		t.Run("path_"+strings.ReplaceAll(path, "/", "_"), func(t *testing.T) {
+			// Test with leading slash
+			req := suite.CreateTestRequest("GET", "/"+path, nil)
+			w := suite.ExecuteRequest(req)
+			suite.AssertStatusCode(t, w, http.StatusOK)
+			suite.AssertBodyEquals(t, w, "Content for "+path)
+		})
+	}
+}
+
+func TestIntegration_ConcurrentRequests(t *testing.T) {
+	suite := SetupTestSuite(t)
+	defer suite.Cleanup()
+
+	// Upload test file
+	testContent := "Concurrent access test"
+	err := suite.UploadTestFile("concurrent.txt", testContent)
+	if err != nil {
+		t.Fatalf("Failed to upload test file: %v", err)
+	}
+
+	// Make multiple concurrent requests
+	const numRequests = 10
+	results := make(chan *httptest.ResponseRecorder, numRequests)
+
+	for i := 0; i < numRequests; i++ {
+		go func() {
+			req := suite.CreateTestRequest("GET", "/concurrent.txt", nil)
+			w := suite.ExecuteRequest(req)
+			results <- w
+		}()
+	}
+
+	// Collect and verify results
+	for i := 0; i < numRequests; i++ {
+		w := <-results
+		suite.AssertStatusCode(t, w, http.StatusOK)
+		suite.AssertBodyEquals(t, w, testContent)
+		suite.AssertHeaderExists(t, w, "ETag")
+	}
+}
+
+func TestIntegration_LargeFile(t *testing.T) {
+	suite := SetupTestSuite(t)
+	defer suite.Cleanup()
+
+	// Create a larger test file (1MB)
+	largeContent := strings.Repeat("This is a large file content. ", 32768) // ~1MB
+	err := suite.UploadTestFile("large.txt", largeContent)
+	if err != nil {
+		t.Fatalf("Failed to upload large test file: %v", err)
+	}
+
+	req := suite.CreateTestRequest("GET", "/large.txt", nil)
+	w := suite.ExecuteRequest(req)
+
+	suite.AssertStatusCode(t, w, http.StatusOK)
+	suite.AssertBodyEquals(t, w, largeContent)
+	suite.AssertHeaderExists(t, w, "Content-Length")
+
+	// Verify Content-Length header
+	expectedLength := len(largeContent)
+	contentLength := w.Header().Get("Content-Length")
+	if contentLength != string(rune(expectedLength)) {
+		// Convert to string properly
+		expectedLengthStr := ""
+		for expectedLength > 0 {
+			expectedLengthStr = string(rune(expectedLength%10+'0')) + expectedLengthStr
+			expectedLength /= 10
+		}
+		if contentLength != expectedLengthStr {
+			t.Errorf("Expected Content-Length to match file size")
+		}
+	}
+}
