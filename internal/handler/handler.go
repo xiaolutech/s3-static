@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"crypto/rand"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -68,12 +69,8 @@ func (h *FileHandler) handleGetObject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Set cache headers
-	h.setCacheHeaders(w, etag, fileInfo.ModTime)
-
-	// Set content headers
-	w.Header().Set("Content-Length", strconv.FormatInt(fileInfo.Size, 10))
-	w.Header().Set("Content-Type", h.getContentType(path))
+	// Set S3 compatible headers
+	h.setS3Headers(w, etag, fileInfo.ModTime, fileInfo.Size, path)
 
 	// Write response
 	w.WriteHeader(http.StatusOK)
@@ -114,15 +111,37 @@ func (h *FileHandler) checkConditionalRequest(r *http.Request, etag string, modT
 	return false
 }
 
-// setCacheHeaders sets appropriate cache headers on the response
-func (h *FileHandler) setCacheHeaders(w http.ResponseWriter, etag string, modTime time.Time) {
+// setS3Headers sets S3 compatible headers on the response
+func (h *FileHandler) setS3Headers(w http.ResponseWriter, etag string, modTime time.Time, size int64, path string) {
+	// S3 标准响应头
+	w.Header().Set("x-amz-request-id", h.generateRequestID())
+	w.Header().Set("x-amz-id-2", h.generateRequestID2())
+	w.Header().Set("Server", "S3-Static/1.0")
+	
+	// 缓存相关头
 	w.Header().Set("ETag", `"`+etag+`"`)
 	w.Header().Set("Last-Modified", modTime.UTC().Format(http.TimeFormat))
 	w.Header().Set("Cache-Control", fmt.Sprintf("max-age=%d", int(h.config.DefaultCacheDuration.Seconds())))
+	
+	// 内容相关头
+	w.Header().Set("Content-Length", strconv.FormatInt(size, 10))
+	w.Header().Set("Content-Type", h.getContentType(path))
+	w.Header().Set("Accept-Ranges", "bytes")
+	
+	// CORS 支持（如果需要）
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "GET, HEAD")
+	w.Header().Set("Access-Control-Allow-Headers", "Range")
+	w.Header().Set("Access-Control-Expose-Headers", "ETag, Last-Modified, Content-Length")
 }
 
 // getContentType determines the content type based on file extension
 func (h *FileHandler) getContentType(path string) string {
+	// Handle files without extensions
+	if !strings.Contains(path, ".") {
+		return "application/octet-stream"
+	}
+	
 	// Simple content type detection based on file extension
 	ext := strings.ToLower(path[strings.LastIndex(path, ".")+1:])
 	switch ext {
@@ -134,6 +153,16 @@ func (h *FileHandler) getContentType(path string) string {
 		return "application/javascript"
 	case "json":
 		return "application/json"
+	case "txt":
+		return "text/plain"
+	case "md":
+		return "text/markdown"
+	case "xml":
+		return "application/xml"
+	case "csv":
+		return "text/csv"
+	case "zip":
+		return "application/zip"
 	case "png":
 		return "image/png"
 	case "jpg", "jpeg":
@@ -155,16 +184,35 @@ func (h *FileHandler) handleStorageError(w http.ResponseWriter, err error, path 
 	h.writeErrorResponse(w, http.StatusInternalServerError, "InternalError", err.Error())
 }
 
+// generateRequestID generates a unique request ID for x-amz-request-id
+func (h *FileHandler) generateRequestID() string {
+	b := make([]byte, 8)
+	rand.Read(b)
+	return fmt.Sprintf("%X", b)
+}
+
+// generateRequestID2 generates a unique request ID for x-amz-id-2
+func (h *FileHandler) generateRequestID2() string {
+	b := make([]byte, 16)
+	rand.Read(b)
+	return fmt.Sprintf("%X", b)
+}
+
 // writeErrorResponse writes an S3-compatible error response
 func (h *FileHandler) writeErrorResponse(w http.ResponseWriter, statusCode int, code, message string) {
+	// 设置 S3 标准错误响应头
 	w.Header().Set("Content-Type", "application/xml")
+	w.Header().Set("x-amz-request-id", h.generateRequestID())
+	w.Header().Set("x-amz-id-2", h.generateRequestID2())
+	
 	w.WriteHeader(statusCode)
 	
 	errorXML := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
 <Error>
     <Code>%s</Code>
     <Message>%s</Message>
-</Error>`, code, message)
+    <RequestId>%s</RequestId>
+</Error>`, code, message, h.generateRequestID())
 	
 	w.Write([]byte(errorXML))
 }

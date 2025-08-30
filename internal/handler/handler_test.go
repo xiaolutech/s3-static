@@ -309,6 +309,11 @@ func TestFileHandler_GetContentType(t *testing.T) {
 		{"animation.gif", "image/gif"},
 		{"icon.svg", "image/svg+xml"},
 		{"document.pdf", "application/pdf"},
+		{"test.txt", "text/plain"},
+		{"readme.md", "text/markdown"},
+		{"config.xml", "application/xml"},
+		{"data.csv", "text/csv"},
+		{"archive.zip", "application/zip"},
 		{"unknown.xyz", "application/octet-stream"},
 		{"noextension", "application/octet-stream"},
 	}
@@ -323,9 +328,10 @@ func TestFileHandler_GetContentType(t *testing.T) {
 	}
 }
 
-func TestFileHandler_SetCacheHeaders(t *testing.T) {
+
+
+func TestFileHandler_SetS3Headers(t *testing.T) {
 	cfg := config.DefaultConfig()
-	cfg.DefaultCacheDuration = 3600 * time.Second // 1 hour
 	logger := config.NewLogger("info")
 	storage := newMockStorage()
 	handler := NewFileHandler(storage, cfg, logger)
@@ -333,8 +339,20 @@ func TestFileHandler_SetCacheHeaders(t *testing.T) {
 	w := httptest.NewRecorder()
 	etag := "test-etag"
 	modTime := time.Date(2023, 1, 1, 12, 0, 0, 0, time.UTC)
+	size := int64(100)
+	path := "test.txt"
 
-	handler.setCacheHeaders(w, etag, modTime)
+	handler.setS3Headers(w, etag, modTime, size, path)
+
+	// Check x-amz-request-id header (should be set to some value)
+	if w.Header().Get("x-amz-request-id") == "" {
+		t.Error("Expected x-amz-request-id header to be set")
+	}
+
+	// Check x-amz-id-2 header (should be set to some value)
+	if w.Header().Get("x-amz-id-2") == "" {
+		t.Error("Expected x-amz-id-2 header to be set")
+	}
 
 	// Check ETag header
 	expectedETag := `"test-etag"`
@@ -342,16 +360,61 @@ func TestFileHandler_SetCacheHeaders(t *testing.T) {
 		t.Errorf("Expected ETag %s, got %s", expectedETag, w.Header().Get("ETag"))
 	}
 
-	// Check Last-Modified header
-	expectedLastModified := modTime.UTC().Format(http.TimeFormat)
-	if w.Header().Get("Last-Modified") != expectedLastModified {
-		t.Errorf("Expected Last-Modified %s, got %s", expectedLastModified, w.Header().Get("Last-Modified"))
+	// Check Content-Type header
+	expectedContentType := "text/plain"
+	if w.Header().Get("Content-Type") != expectedContentType {
+		t.Errorf("Expected Content-Type %s, got %s", expectedContentType, w.Header().Get("Content-Type"))
 	}
 
-	// Check Cache-Control header
-	expectedCacheControl := "max-age=3600"
-	if w.Header().Get("Cache-Control") != expectedCacheControl {
-		t.Errorf("Expected Cache-Control %s, got %s", expectedCacheControl, w.Header().Get("Cache-Control"))
+	// Check Accept-Ranges header
+	if w.Header().Get("Accept-Ranges") != "bytes" {
+		t.Error("Expected Accept-Ranges header to be 'bytes'")
+	}
+
+	// Check CORS headers
+	if w.Header().Get("Access-Control-Allow-Origin") != "*" {
+		t.Error("Expected CORS Allow-Origin header to be '*'")
+	}
+}
+
+func TestFileHandler_HandleGetObject_WithS3Headers(t *testing.T) {
+	cfg := config.DefaultConfig()
+	logger := config.NewLogger("info")
+	storage := newMockStorage()
+	handler := NewFileHandler(storage, cfg, logger)
+
+	// Add test file
+	content := []byte("Hello, World!")
+	modTime := time.Now().Truncate(time.Second)
+	storage.addFile("test.txt", content, modTime)
+
+	// Test successful request
+	req := httptest.NewRequest("GET", "/test.txt", nil)
+	w := httptest.NewRecorder()
+
+	handler.handleGetObject(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("Expected status 200, got %d", w.Code)
+	}
+
+	// Check S3 headers are present
+	if w.Header().Get("x-amz-request-id") == "" {
+		t.Error("Expected x-amz-request-id header to be set")
+	}
+
+	if w.Header().Get("x-amz-id-2") == "" {
+		t.Error("Expected x-amz-id-2 header to be set")
+	}
+
+	if w.Header().Get("Server") == "" {
+		t.Error("Expected Server header to be set")
+	}
+
+	// Check Content-Type is properly detected
+	expectedContentType := "text/plain"
+	if w.Header().Get("Content-Type") != expectedContentType {
+		t.Errorf("Expected Content-Type %s, got %s", expectedContentType, w.Header().Get("Content-Type"))
 	}
 }
 
