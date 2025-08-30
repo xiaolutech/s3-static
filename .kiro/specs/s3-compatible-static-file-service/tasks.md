@@ -1,6 +1,6 @@
 # 实现计划
 
-- [ ] 1. 设置项目结构和核心接口
+- [x] 1. 设置项目结构和核心接口
   - 创建 Go 模块和基本目录结构（cmd、internal、pkg）
   - 定义核心接口：Storage、CacheManager、ETagGenerator
   - 设置基本的 main.go 入口文件
