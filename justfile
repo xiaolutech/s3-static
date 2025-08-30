@@ -7,6 +7,9 @@ default:
 # 运行所有测试
 test: test-unit test-integration test-examples-short
 
+# 运行所有测试（包括 Docker 测试）
+test-all: test-unit test-integration test-examples-short test-docker
+
 # 运行单元测试
 test-unit:
     @echo "运行单元测试..."
@@ -108,6 +111,16 @@ test-examples:
 test-examples-short:
     @echo "运行示例测试（短模式）..."
     go test -v -short ./examples/...
+
+# 运行 Docker 测试
+test-docker:
+    @echo "运行 Docker 测试..."
+    go test -v -run TestDocker -timeout 20m .
+
+# 运行 Docker 测试（短模式）
+test-docker-short:
+    @echo "运行 Docker 测试（短模式）..."
+    go test -v -short -run TestDocker .
 
 # 格式化代码
 fmt:
