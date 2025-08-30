@@ -1,0 +1,26 @@
+{
+  "enabled": true,
+  "name": "TDD Task Development",
+  "description": "Monitors for new task files or task-related changes and prompts to follow TDD methodology: write tests first, then implement incrementally with focus on learning from existing code, being pragmatic over dogmatic, and maintaining clear intent over clever code",
+  "version": "1",
+  "when": {
+    "type": "fileEdited",
+    "patterns": [
+      "**/*task*",
+      "**/*TODO*",
+      "**/*todo*",
+      "**/tasks/**",
+      "**/*.md",
+      "**/*.py",
+      "**/*.js",
+      "**/*.ts",
+      "**/*.java",
+      "**/*.cpp",
+      "**/*.c"
+    ]
+  },
+  "then": {
+    "type": "askAgent",
+    "prompt": "A task-related file has been modified. Following TDD methodology, please:\n\n1. **Write tests first** - Before implementing any functionality, create comprehensive tests that define the expected behavior\n2. **Implement incrementally** - Make small, incremental progress rather than big bang changes\n3. **Learn from existing code** - Study and understand the current codebase patterns and conventions\n4. **Be pragmatic over dogmatic** - Focus on practical solutions that work well in this specific context\n5. **Prioritize clear intent over clever code** - Write code that clearly expresses its purpose and is easy to understand\n\nStart by analyzing what needs to be tested, write the failing tests, then implement the minimal code to make them pass. Refactor as needed while keeping tests green."
+  }
+}
