@@ -68,8 +68,8 @@ The service is configured via environment variables:
 - `BUCKET_NAME` - S3 bucket name (required)
 
 ### Cache Configuration
-- `CACHE_STRATEGY` - Caching strategy: `no-cache`, `max-age`, `immutable` (default: no-cache)
-- `CACHE_DURATION` - Cache duration for max-age and immutable strategies (default: 1h)
+- `CACHE_STRATEGY` - Caching strategy: `no-cache`, `max-age`, `immutable` (default: immutable)
+- `CACHE_DURATION` - Cache duration for max-age and immutable strategies (default: 8760h)
 
 ## Caching Strategies
 

@@ -41,8 +41,8 @@ func DefaultConfig() *Config {
 		BucketName:           "default",
 		S3Region:             "us-east-1",
 		S3UseSSL:             true,
-		DefaultCacheDuration: time.Hour,
-		CacheStrategy:        "no-cache", // 默认使用最佳实践
+		DefaultCacheDuration: time.Hour * 24 * 365, // 1 year
+		CacheStrategy:        "immutable",          // Default strategy
 		LogLevel:             "info",
 	}
 }

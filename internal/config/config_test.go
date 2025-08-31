@@ -21,8 +21,8 @@ func TestDefaultConfig(t *testing.T) {
 	if config.BucketName != "default" {
 		t.Errorf("Expected default bucket name to be 'default', got '%s'", config.BucketName)
 	}
-	if config.DefaultCacheDuration != time.Hour {
-		t.Errorf("Expected default cache duration to be 1 hour, got %v", config.DefaultCacheDuration)
+	if config.DefaultCacheDuration != time.Hour*24*365 {
+		t.Errorf("Expected default cache duration to be 1 year, got %v", config.DefaultCacheDuration)
 	}
 	if config.LogLevel != "info" {
 		t.Errorf("Expected default log level to be 'info', got '%s'", config.LogLevel)
