@@ -10,12 +10,12 @@ import (
 func TestDefaultConfig_CacheStrategy(t *testing.T) {
 	config := DefaultConfig()
 
-	if config.CacheStrategy != "no-cache" {
-		t.Errorf("Expected default cache strategy to be 'no-cache', got '%s'", config.CacheStrategy)
+	if config.CacheStrategy != "immutable" {
+		t.Errorf("Expected default cache strategy to be 'immutable', got '%s'", config.CacheStrategy)
 	}
 
-	if config.DefaultCacheDuration != time.Hour {
-		t.Errorf("Expected default cache duration to be 1 hour, got %v", config.DefaultCacheDuration)
+	if config.DefaultCacheDuration != time.Hour*24*365 {
+		t.Errorf("Expected default cache duration to be 1 year, got %v", config.DefaultCacheDuration)
 	}
 }
 
@@ -54,7 +54,7 @@ func TestLoadFromEnv_CacheStrategy(t *testing.T) {
 		{
 			name:          "empty strategy uses default",
 			envValue:      "",
-			expectedValue: "no-cache",
+			expectedValue: "immutable",
 			shouldError:   false,
 		},
 	}
@@ -179,12 +179,12 @@ func clearCacheEnvVars() {
 
 // Helper function to check if a string contains a substring
 func containsString(str, substr string) bool {
-	return len(str) >= len(substr) && 
-		   (str == substr || 
-		    (len(str) > len(substr) && 
-		     (str[:len(substr)] == substr || 
-		      str[len(str)-len(substr):] == substr || 
-		      containsSubstring(str, substr))))
+	return len(str) >= len(substr) &&
+		(str == substr ||
+			(len(str) > len(substr) &&
+				(str[:len(substr)] == substr ||
+					str[len(str)-len(substr):] == substr ||
+					containsSubstring(str, substr))))
 }
 
 func containsSubstring(str, substr string) bool {

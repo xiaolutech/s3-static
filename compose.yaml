@@ -51,7 +51,8 @@ services:
       - S3_SECRET_ACCESS_KEY=minioadmin
       - S3_USE_SSL=false
       - BUCKET_NAME=static-files
-      - CACHE_DURATION=1h
+      - CACHE_STRATEGY=immutable
+      - CACHE_DURATION=8760h
     depends_on:
       minio-setup:
         condition: service_completed_successfully
