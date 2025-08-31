@@ -26,6 +26,7 @@ type Config struct {
 
 	// Cache configuration
 	DefaultCacheDuration time.Duration `env:"CACHE_DURATION"`
+	CacheStrategy        string        `env:"CACHE_STRATEGY"` // "no-cache", "max-age", or "immutable"
 
 	// Logging configuration
 	LogLevel string `env:"LOG_LEVEL"`
@@ -41,6 +42,7 @@ func DefaultConfig() *Config {
 		S3Region:             "us-east-1",
 		S3UseSSL:             true,
 		DefaultCacheDuration: time.Hour,
+		CacheStrategy:        "no-cache", // 默认使用最佳实践
 		LogLevel:             "info",
 	}
 }
@@ -64,6 +66,9 @@ func LoadFromEnv() (*Config, error) {
 	}
 	if logLevel := os.Getenv("LOG_LEVEL"); logLevel != "" {
 		config.LogLevel = logLevel
+	}
+	if cacheStrategy := os.Getenv("CACHE_STRATEGY"); cacheStrategy != "" {
+		config.CacheStrategy = cacheStrategy
 	}
 
 	// Load S3 configuration
@@ -131,6 +136,16 @@ func (c *Config) Validate() error {
 
 	if c.DefaultCacheDuration <= 0 {
 		return fmt.Errorf("default cache duration must be positive, got: %v", c.DefaultCacheDuration)
+	}
+
+	// Validate cache strategy
+	validCacheStrategies := map[string]bool{
+		"no-cache":  true,
+		"max-age":   true,
+		"immutable": true,
+	}
+	if !validCacheStrategies[c.CacheStrategy] {
+		return fmt.Errorf("invalid cache strategy: %s, must be one of: no-cache, max-age, immutable", c.CacheStrategy)
 	}
 
 	// Validate log level

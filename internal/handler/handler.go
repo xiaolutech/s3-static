@@ -119,7 +119,9 @@ func (h *FileHandler) setS3Headers(w http.ResponseWriter, etag string, modTime t
 	// 缓存相关头
 	w.Header().Set("ETag", `"`+etag+`"`)
 	w.Header().Set("Last-Modified", modTime.UTC().Format(http.TimeFormat))
-	w.Header().Set("Cache-Control", fmt.Sprintf("max-age=%d", int(h.config.DefaultCacheDuration.Seconds())))
+	
+	// 根据配置的缓存策略设置 Cache-Control 头
+	h.setCacheControlHeader(w, path)
 
 	// 内容相关头
 	w.Header().Set("Content-Length", strconv.FormatInt(size, 10))
@@ -131,6 +133,30 @@ func (h *FileHandler) setS3Headers(w http.ResponseWriter, etag string, modTime t
 	w.Header().Set("Access-Control-Allow-Methods", "GET, HEAD")
 	w.Header().Set("Access-Control-Allow-Headers", "Range")
 	w.Header().Set("Access-Control-Expose-Headers", "ETag, Last-Modified, Content-Length")
+}
+
+// setCacheControlHeader sets the appropriate Cache-Control header based on strategy
+func (h *FileHandler) setCacheControlHeader(w http.ResponseWriter, path string) {
+	switch h.config.CacheStrategy {
+	case "no-cache":
+		// 最佳实践：可变内容总是验证缓存
+		// 浏览器会发送条件请求 (If-None-Match/If-Modified-Since)
+		// 如果内容未变化，服务器返回 304 Not Modified
+		w.Header().Set("Cache-Control", "no-cache")
+		
+	case "max-age":
+		// 传统方式：使用 max-age（不推荐用于可变内容）
+		w.Header().Set("Cache-Control", fmt.Sprintf("max-age=%d", int(h.config.DefaultCacheDuration.Seconds())))
+		
+	case "immutable":
+		// 适用于永不变化的内容（如带版本号的静态资源）
+		// 浏览器在 max-age 期间内完全不会发送请求
+		w.Header().Set("Cache-Control", fmt.Sprintf("max-age=%d, immutable", int(h.config.DefaultCacheDuration.Seconds())))
+		
+	default:
+		// 默认使用 no-cache（最安全的选择）
+		w.Header().Set("Cache-Control", "no-cache")
+	}
 }
 
 // getContentType determines the content type based on file extension

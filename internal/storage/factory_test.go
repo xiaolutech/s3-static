@@ -20,6 +20,7 @@ func TestNewStorage_S3Enabled(t *testing.T) {
 		S3UseSSL:             false,
 		LogLevel:             "info",
 		DefaultCacheDuration: time.Hour,
+		CacheStrategy:        "no-cache",
 	}
 
 	// This will fail because we don't have a real S3 server running
@@ -44,6 +45,7 @@ func TestNewStorage_S3Disabled(t *testing.T) {
 		BucketName:           "test-bucket",
 		LogLevel:             "info",
 		DefaultCacheDuration: time.Hour,
+		CacheStrategy:        "no-cache",
 	}
 
 	_, err := NewStorage(cfg)
@@ -74,6 +76,7 @@ func TestNewStorage_InvalidS3Config(t *testing.T) {
 				BucketName:           "test-bucket",
 				LogLevel:             "info",
 				DefaultCacheDuration: time.Hour,
+				CacheStrategy:        "no-cache",
 			},
 		},
 		{
@@ -88,6 +91,7 @@ func TestNewStorage_InvalidS3Config(t *testing.T) {
 				BucketName:           "test-bucket",
 				LogLevel:             "info",
 				DefaultCacheDuration: time.Hour,
+				CacheStrategy:        "no-cache",
 			},
 		},
 		{
@@ -102,6 +106,7 @@ func TestNewStorage_InvalidS3Config(t *testing.T) {
 				BucketName:           "test-bucket",
 				LogLevel:             "info",
 				DefaultCacheDuration: time.Hour,
+				CacheStrategy:        "no-cache",
 			},
 		},
 	}
@@ -142,6 +147,7 @@ func TestNewStorage_ConfigValidation(t *testing.T) {
 				S3UseSSL:             false,
 				LogLevel:             "info",
 				DefaultCacheDuration: time.Hour,
+				CacheStrategy:        "no-cache",
 			},
 			expectError:    true, // Will fail on connection, but config is valid
 			expectedErrMsg: "failed to create S3 storage",
@@ -159,6 +165,7 @@ func TestNewStorage_ConfigValidation(t *testing.T) {
 				S3Region:             "us-east-1",
 				LogLevel:             "info",
 				DefaultCacheDuration: time.Hour,
+				CacheStrategy:        "no-cache",
 			},
 			expectError:    true,
 			expectedErrMsg: "invalid configuration",
@@ -176,6 +183,7 @@ func TestNewStorage_ConfigValidation(t *testing.T) {
 				S3Region:             "us-east-1",
 				LogLevel:             "info",
 				DefaultCacheDuration: time.Hour,
+				CacheStrategy:        "no-cache",
 			},
 			expectError:    true,
 			expectedErrMsg: "invalid configuration",
