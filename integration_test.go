@@ -196,7 +196,7 @@ func TestIntegration_ErrorHandling(t *testing.T) {
 		req := suite.CreateTestRequest("GET", "/nonexistent.txt", nil)
 		w := suite.ExecuteRequest(req)
 
-		suite.AssertStatusCode(t, w, http.StatusInternalServerError)
+		suite.AssertStatusCode(t, w, http.StatusNotFound)
 		suite.AssertHeader(t, w, "Content-Type", "application/xml")
 		suite.AssertBodyContains(t, w, "<Error>")
 		suite.AssertBodyContains(t, w, "<Code>")
