@@ -237,10 +237,10 @@ func TestIntegration_CacheHeaders(t *testing.T) {
 
 	suite.AssertStatusCode(t, w, http.StatusOK)
 
-	// Check cache headers
+	// Check cache headers - default strategy is now no-cache
 	cacheControl := w.Header().Get("Cache-Control")
-	if !strings.Contains(cacheControl, "max-age=") {
-		t.Errorf("Expected Cache-Control to contain max-age, got: %s", cacheControl)
+	if cacheControl != "no-cache" {
+		t.Errorf("Expected Cache-Control to be 'no-cache' (default strategy), got: %s", cacheControl)
 	}
 
 	etag := w.Header().Get("ETag")
@@ -262,6 +262,87 @@ func TestIntegration_CacheHeaders(t *testing.T) {
 	_, err = http.ParseTime(lastModified)
 	if err != nil {
 		t.Errorf("Invalid Last-Modified format: %s", lastModified)
+	}
+}
+
+func TestIntegration_CacheStrategies(t *testing.T) {
+	testCases := []struct {
+		name                string
+		cacheStrategy       string
+		cacheDuration       string
+		expectedCacheHeader string
+		description         string
+	}{
+		{
+			name:                "no-cache strategy",
+			cacheStrategy:       "no-cache",
+			cacheDuration:       "1h",
+			expectedCacheHeader: "no-cache",
+			description:         "Should use no-cache for variable content",
+		},
+		{
+			name:                "max-age strategy",
+			cacheStrategy:       "max-age",
+			cacheDuration:       "2h",
+			expectedCacheHeader: "max-age=7200",
+			description:         "Should use max-age with duration in seconds",
+		},
+		{
+			name:                "immutable strategy",
+			cacheStrategy:       "immutable",
+			cacheDuration:       "24h",
+			expectedCacheHeader: "max-age=86400, immutable",
+			description:         "Should use max-age with immutable directive",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Create test suite with specific cache strategy
+			suite := SetupTestSuiteWithEnv(t, map[string]string{
+				"CACHE_STRATEGY": tc.cacheStrategy,
+				"CACHE_DURATION": tc.cacheDuration,
+			})
+			defer suite.Cleanup()
+
+			// Upload test file
+			err := suite.UploadTestFile("strategy-test.txt", "Cache strategy test content")
+			if err != nil {
+				t.Fatalf("Failed to upload test file: %v", err)
+			}
+
+			req := suite.CreateTestRequest("GET", "/strategy-test.txt", nil)
+			w := suite.ExecuteRequest(req)
+
+			suite.AssertStatusCode(t, w, http.StatusOK)
+
+			// Check cache strategy is applied correctly
+			cacheControl := w.Header().Get("Cache-Control")
+			if cacheControl != tc.expectedCacheHeader {
+				t.Errorf("%s: Expected Cache-Control '%s', got '%s'", 
+					tc.description, tc.expectedCacheHeader, cacheControl)
+			}
+
+			// Verify other cache-related headers are still present
+			if w.Header().Get("ETag") == "" {
+				t.Error("ETag header should be present regardless of cache strategy")
+			}
+
+			if w.Header().Get("Last-Modified") == "" {
+				t.Error("Last-Modified header should be present regardless of cache strategy")
+			}
+
+			// Test conditional requests work with all strategies
+			etag := w.Header().Get("ETag")
+			req2 := suite.CreateTestRequest("GET", "/strategy-test.txt", nil)
+			req2.Header.Set("If-None-Match", etag)
+			w2 := suite.ExecuteRequest(req2)
+
+			// Should return 304 regardless of cache strategy
+			if w2.Code != http.StatusNotModified {
+				t.Errorf("Expected 304 Not Modified for strategy %s, got %d", tc.cacheStrategy, w2.Code)
+			}
+		})
 	}
 }
 

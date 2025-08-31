@@ -6,6 +6,7 @@ A high-performance, S3-compatible static file service built in Go. This service 
 
 - **S3 Compatibility**: Compatible with S3-compatible storage backends (MinIO, AWS S3, etc.)
 - **High Performance**: Optimized for serving static files with minimal latency
+- **Smart Caching**: Multiple caching strategies (no-cache, max-age, immutable) following HTTP best practices
 - **ETag Support**: Automatic ETag generation and validation for efficient caching
 - **Conditional Requests**: Support for If-None-Match, If-Modified-Since headers
 - **Health Monitoring**: Built-in health check endpoint
@@ -67,7 +68,40 @@ The service is configured via environment variables:
 - `BUCKET_NAME` - S3 bucket name (required)
 
 ### Cache Configuration
-- `CACHE_DURATION` - Default cache duration (default: 1h)
+- `CACHE_STRATEGY` - Caching strategy: `no-cache`, `max-age`, `immutable` (default: no-cache)
+- `CACHE_DURATION` - Cache duration for max-age and immutable strategies (default: 1h)
+
+## Caching Strategies
+
+The service supports three caching strategies optimized for different use cases:
+
+### immutable (Recommended, Default)
+```bash
+export CACHE_STRATEGY=immutable
+export CACHE_DURATION=8760h  # 1 year
+```
+- **Best for**: Static files that don't change after creation (99.9% of uploads)
+- **Behavior**: Browser never requests file again during cache period
+- **Benefits**: Maximum performance, zero network requests, best user experience
+
+### no-cache (For Variable Content)
+```bash
+export CACHE_STRATEGY=no-cache
+```
+- **Best for**: Content that may change (0.1% of files)
+- **Behavior**: Browser validates cache on every request using ETag/Last-Modified
+- **Benefits**: Always serves fresh content while leveraging cache efficiency
+
+### max-age (Not Recommended)
+```bash
+export CACHE_STRATEGY=max-age
+export CACHE_DURATION=1h
+```
+- **Best for**: Testing or special requirements only
+- **Behavior**: Browser may serve stale content during cache period
+- **Warning**: Can cause version mismatch issues with related files
+
+For detailed caching documentation, see [docs/CACHING.md](docs/CACHING.md).
 
 ## API Endpoints
 
