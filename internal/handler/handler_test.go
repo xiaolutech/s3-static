@@ -3,6 +3,7 @@ package handler
 import (
 	"net/http"
 	"net/http/httptest"
+	"s3-static/internal/storage"
 	"strings"
 	"testing"
 	"time"
@@ -28,14 +29,14 @@ func (m *mockStorage) GetFileInfo(path string) (*interfaces.FileInfo, error) {
 	if info, exists := m.files[path]; exists {
 		return info, nil
 	}
-	return nil, &mockError{message: "file not found"}
+	return nil, &storage.StorageError{Type: storage.ErrorNotFound, Message: "file not found"}
 }
 
 func (m *mockStorage) ReadFile(path string) ([]byte, error) {
 	if data, exists := m.data[path]; exists {
 		return data, nil
 	}
-	return nil, &mockError{message: "file not found"}
+	return nil, &storage.StorageError{Type: storage.ErrorNotFound, Message: "file not found"}
 }
 
 func (m *mockStorage) FileExists(path string) bool {
@@ -52,14 +53,6 @@ func (m *mockStorage) addFile(path string, content []byte, modTime time.Time) {
 		ETag:    "test-etag",
 	}
 	m.data[path] = content
-}
-
-type mockError struct {
-	message string
-}
-
-func (e *mockError) Error() string {
-	return e.message
 }
 
 func TestFileHandler_UsesS3ETag(t *testing.T) {
@@ -230,8 +223,8 @@ func TestFileHandler_HandleGetObject_FileNotFound(t *testing.T) {
 
 	handler.handleGetObject(w, req)
 
-	if w.Code != http.StatusInternalServerError {
-		t.Errorf("Expected status 500, got %d", w.Code)
+	if w.Code != http.StatusNotFound {
+		t.Errorf("Expected status 404, got %d", w.Code)
 	}
 
 	if w.Header().Get("Content-Type") != "application/xml" {
@@ -239,8 +232,8 @@ func TestFileHandler_HandleGetObject_FileNotFound(t *testing.T) {
 	}
 
 	body := w.Body.String()
-	if !strings.Contains(body, "<Error>") {
-		t.Error("Expected XML error response")
+	if !strings.Contains(body, "<Code>NoSuchKey</Code>") {
+		t.Errorf("Expected XML error response with NoSuchKey code, got: %s", body)
 	}
 }
 

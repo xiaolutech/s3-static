@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"s3-static/internal/config"
+	"s3-static/internal/storage"
 	"s3-static/pkg/interfaces"
 )
 
@@ -119,7 +120,7 @@ func (h *FileHandler) setS3Headers(w http.ResponseWriter, etag string, modTime t
 	// 缓存相关头
 	w.Header().Set("ETag", `"`+etag+`"`)
 	w.Header().Set("Last-Modified", modTime.UTC().Format(http.TimeFormat))
-	
+
 	// 根据配置的缓存策略设置 Cache-Control 头
 	h.setCacheControlHeader(w, path)
 
@@ -143,16 +144,16 @@ func (h *FileHandler) setCacheControlHeader(w http.ResponseWriter, path string) 
 		// 浏览器会发送条件请求 (If-None-Match/If-Modified-Since)
 		// 如果内容未变化，服务器返回 304 Not Modified
 		w.Header().Set("Cache-Control", "no-cache")
-		
+
 	case "max-age":
 		// 传统方式：使用 max-age（不推荐用于可变内容）
 		w.Header().Set("Cache-Control", fmt.Sprintf("max-age=%d", int(h.config.DefaultCacheDuration.Seconds())))
-		
+
 	case "immutable":
 		// 适用于永不变化的内容（如带版本号的静态资源）
 		// 浏览器在 max-age 期间内完全不会发送请求
 		w.Header().Set("Cache-Control", fmt.Sprintf("max-age=%d, immutable", int(h.config.DefaultCacheDuration.Seconds())))
-		
+
 	default:
 		// 默认使用 no-cache（最安全的选择）
 		w.Header().Set("Cache-Control", "no-cache")
@@ -204,7 +205,13 @@ func (h *FileHandler) getContentType(path string) string {
 
 // handleStorageError handles storage-related errors
 func (h *FileHandler) handleStorageError(w http.ResponseWriter, err error, path string) {
-	// This would use the error mapping from storage package
+	if storage.IsNotFound(err) {
+		h.logger.Warn("Object not found", "path", path)
+		h.writeErrorResponse(w, http.StatusNotFound, "NoSuchKey", "The specified key does not exist.")
+		return
+	}
+
+	h.logger.Error("Storage error", "path", path, "error", err)
 	h.writeErrorResponse(w, http.StatusInternalServerError, "InternalError", err.Error())
 }
 
