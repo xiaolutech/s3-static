@@ -71,7 +71,7 @@ func (h *FileHandler) handleGetObject(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Set S3 compatible headers
-	h.setS3Headers(w, etag, fileInfo.ModTime, fileInfo.Size, path)
+	h.setS3Headers(w, etag, fileInfo.ModTime, fileInfo.Size, path, fileInfo.ContentType)
 
 	// Write response
 	w.WriteHeader(http.StatusOK)
@@ -111,7 +111,7 @@ func (h *FileHandler) checkConditionalRequest(r *http.Request, etag string, modT
 }
 
 // setS3Headers sets S3 compatible headers on the response
-func (h *FileHandler) setS3Headers(w http.ResponseWriter, etag string, modTime time.Time, size int64, path string) {
+func (h *FileHandler) setS3Headers(w http.ResponseWriter, etag string, modTime time.Time, size int64, path string, contentType string) {
 	// S3 标准响应头
 	w.Header().Set("x-amz-request-id", h.generateRequestID())
 	w.Header().Set("x-amz-id-2", h.generateRequestID2())
@@ -126,7 +126,11 @@ func (h *FileHandler) setS3Headers(w http.ResponseWriter, etag string, modTime t
 
 	// 内容相关头
 	w.Header().Set("Content-Length", strconv.FormatInt(size, 10))
-	w.Header().Set("Content-Type", h.getContentType(path))
+	if contentType != "" {
+		w.Header().Set("Content-Type", contentType)
+	} else {
+		w.Header().Set("Content-Type", h.getContentType(path))
+	}
 	w.Header().Set("Accept-Ranges", "bytes")
 
 	// CORS 支持（如果需要）

@@ -159,6 +159,28 @@ func TestIntegration_ContentTypes(t *testing.T) {
 	}
 }
 
+func TestIntegration_WebMContentType(t *testing.T) {
+	suite := SetupTestSuite(t)
+	defer suite.Cleanup()
+
+	// Upload a .webm file with explicit Content-Type
+	// .webm was previously not supported and would default to application/octet-stream
+	path := "video.webm"
+	contentType := "video/webm"
+	content := "fake-webm-content"
+
+	err := suite.UploadTestFileWithContentType(path, content, contentType)
+	if err != nil {
+		t.Fatalf("Failed to upload test file: %v", err)
+	}
+
+	req := suite.CreateTestRequest("GET", "/"+path, nil)
+	w := suite.ExecuteRequest(req)
+
+	suite.AssertStatusCode(t, w, http.StatusOK)
+	suite.AssertHeader(t, w, "Content-Type", contentType)
+}
+
 func TestIntegration_S3Headers(t *testing.T) {
 	suite := SetupTestSuite(t)
 	defer suite.Cleanup()

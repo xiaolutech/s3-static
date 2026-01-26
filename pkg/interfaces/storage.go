@@ -11,6 +11,7 @@ type FileInfo struct {
 	ModTime time.Time
 	IsDir   bool
 	ETag    string // S3 object ETag if available
+	ContentType string // Content type from storage metadata
 }
 
 // Storage defines the interface for file storage operations

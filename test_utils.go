@@ -261,6 +261,15 @@ func (ts *TestSuite) UploadTestFile(key, content string) error {
 	return err
 }
 
+// UploadTestFileWithContentType uploads a test file with specific content type
+func (ts *TestSuite) UploadTestFileWithContentType(key, content, contentType string) error {
+	_, err := ts.Client.PutObject(context.TODO(), ts.Config.BucketName, key,
+		strings.NewReader(content), int64(len(content)), minio.PutObjectOptions{
+			ContentType: contentType,
+		})
+	return err
+}
+
 // CreateTestRequest creates an HTTP test request
 func (ts *TestSuite) CreateTestRequest(method, path string, body io.Reader) *http.Request {
 	req := httptest.NewRequest(method, path, body)

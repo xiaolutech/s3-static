@@ -69,11 +69,12 @@ func (s *S3Storage) GetFileInfo(path string) (*interfaces.FileInfo, error) {
 	}
 
 	return &interfaces.FileInfo{
-		Path:    path,
-		Size:    objInfo.Size,
-		ModTime: objInfo.LastModified,
-		IsDir:   false,                           // S3 objects are always files
-		ETag:    strings.Trim(objInfo.ETag, `"`), // Remove quotes from ETag
+		Path:        path,
+		Size:        objInfo.Size,
+		ModTime:     objInfo.LastModified,
+		IsDir:       false,                           // S3 objects are always files
+		ETag:        strings.Trim(objInfo.ETag, `"`), // Remove quotes from ETag
+		ContentType: objInfo.ContentType,             // Get content type from metadata
 	}, nil
 }
 

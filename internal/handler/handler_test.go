@@ -55,6 +55,11 @@ func (m *mockStorage) addFile(path string, content []byte, modTime time.Time) {
 	m.data[path] = content
 }
 
+func (m *mockStorage) addFileWithContentType(path string, content []byte, modTime time.Time, contentType string) {
+	m.addFile(path, content, modTime)
+	m.files[path].ContentType = contentType
+}
+
 func TestFileHandler_UsesS3ETag(t *testing.T) {
 	cfg := config.DefaultConfig()
 	logger := config.NewLogger("info")
@@ -333,7 +338,7 @@ func TestFileHandler_SetS3Headers(t *testing.T) {
 	size := int64(100)
 	path := "test.txt"
 
-	handler.setS3Headers(w, etag, modTime, size, path)
+	handler.setS3Headers(w, etag, modTime, size, path, "")
 
 	// Check x-amz-request-id header (should be set to some value)
 	if w.Header().Get("x-amz-request-id") == "" {
@@ -519,5 +524,33 @@ func TestHealthHandler_MethodNotAllowed(t *testing.T) {
 
 	if w.Code != http.StatusMethodNotAllowed {
 		t.Errorf("Expected status 405, got %d", w.Code)
+	}
+}
+
+func TestFileHandler_UsesStorageContentType(t *testing.T) {
+	cfg := config.DefaultConfig()
+	logger := config.NewLogger("info")
+	storage := newMockStorage()
+	handler := NewFileHandler(storage, cfg, logger)
+
+	// Add test file with specific Content-Type in storage
+	content := []byte("webm-content")
+	modTime := time.Now().Truncate(time.Second)
+	// .webm is currently not in the extension list, so it would default to octet-stream
+	// We want it to be video/webm from storage
+	storage.addFileWithContentType("video.webm", content, modTime, "video/webm")
+
+	req := httptest.NewRequest("GET", "/video.webm", nil)
+	w := httptest.NewRecorder()
+
+	handler.handleGetObject(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("Expected status 200, got %d", w.Code)
+	}
+
+	expectedContentType := "video/webm"
+	if w.Header().Get("Content-Type") != expectedContentType {
+		t.Errorf("Expected Content-Type '%s', got '%s'", expectedContentType, w.Header().Get("Content-Type"))
 	}
 }
