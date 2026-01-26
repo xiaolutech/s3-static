@@ -254,10 +254,39 @@ func (ts *TestSuite) Cleanup() {
 	}
 }
 
-// UploadTestFile uploads a test file to the MinIO container
+	// UploadTestFile uploads a test file to the MinIO container
 func (ts *TestSuite) UploadTestFile(key, content string) error {
+	contentType := "application/octet-stream"
+	if strings.HasSuffix(key, ".html") {
+		contentType = "text/html"
+	} else if strings.HasSuffix(key, ".css") {
+		contentType = "text/css"
+	} else if strings.HasSuffix(key, ".js") {
+		contentType = "application/javascript"
+	} else if strings.HasSuffix(key, ".json") {
+		contentType = "application/json"
+	} else if strings.HasSuffix(key, ".txt") {
+		contentType = "text/plain"
+	} else if strings.HasSuffix(key, ".xml") {
+		contentType = "application/xml"
+	} else if strings.HasSuffix(key, ".png") {
+		contentType = "image/png"
+	} else if strings.HasSuffix(key, ".jpg") {
+		contentType = "image/jpeg"
+	} else if strings.HasSuffix(key, ".gif") {
+		contentType = "image/gif"
+	} else if strings.HasSuffix(key, ".svg") {
+		contentType = "image/svg+xml"
+	} else if strings.HasSuffix(key, ".pdf") {
+		contentType = "application/pdf"
+	} else if strings.HasSuffix(key, ".zip") {
+		contentType = "application/zip"
+	}
+
 	_, err := ts.Client.PutObject(context.TODO(), ts.Config.BucketName, key,
-		strings.NewReader(content), int64(len(content)), minio.PutObjectOptions{})
+		strings.NewReader(content), int64(len(content)), minio.PutObjectOptions{
+			ContentType: contentType,
+		})
 	return err
 }
 

@@ -25,6 +25,47 @@ func newMockStorage() *mockStorage {
 	}
 }
 
+
+
+func detectTestContentType(path string) string {
+	ext := strings.ToLower(path[strings.LastIndex(path, ".")+1:])
+	switch ext {
+	case "html", "htm":
+		return "text/html"
+	case "css":
+		return "text/css"
+	case "js":
+		return "application/javascript"
+	case "json":
+		return "application/json"
+	case "txt":
+		return "text/plain"
+	case "md":
+		return "text/markdown"
+	case "xml":
+		return "application/xml"
+	case "csv":
+		return "text/csv"
+	case "zip":
+		return "application/zip"
+	case "png":
+		return "image/png"
+	case "jpg", "jpeg":
+		return "image/jpeg"
+	case "gif":
+		return "image/gif"
+	case "svg":
+		return "image/svg+xml"
+	case "pdf":
+		return "application/pdf"
+	// specific for the new test case, ensuring it doesn't conflict
+	case "webm":
+		return "video/webm"
+	default:
+		return "application/octet-stream"
+	}
+}
+
 func (m *mockStorage) GetFileInfo(path string) (*interfaces.FileInfo, error) {
 	if info, exists := m.files[path]; exists {
 		return info, nil
@@ -51,6 +92,8 @@ func (m *mockStorage) addFile(path string, content []byte, modTime time.Time) {
 		ModTime: modTime,
 		IsDir:   false,
 		ETag:    "test-etag",
+		// Simulate S3 behavior: auto-detect content type on upload
+		ContentType: detectTestContentType(path),
 	}
 	m.data[path] = content
 }
@@ -286,45 +329,7 @@ func TestFileHandler_ServeHTTP_MethodNotAllowed(t *testing.T) {
 	}
 }
 
-func TestFileHandler_GetContentType(t *testing.T) {
-	cfg := config.DefaultConfig()
-	logger := config.NewLogger("info")
-	storage := newMockStorage()
-	handler := NewFileHandler(storage, cfg, logger)
 
-	tests := []struct {
-		path     string
-		expected string
-	}{
-		{"test.html", "text/html"},
-		{"test.htm", "text/html"},
-		{"style.css", "text/css"},
-		{"script.js", "application/javascript"},
-		{"data.json", "application/json"},
-		{"image.png", "image/png"},
-		{"photo.jpg", "image/jpeg"},
-		{"photo.jpeg", "image/jpeg"},
-		{"animation.gif", "image/gif"},
-		{"icon.svg", "image/svg+xml"},
-		{"document.pdf", "application/pdf"},
-		{"test.txt", "text/plain"},
-		{"readme.md", "text/markdown"},
-		{"config.xml", "application/xml"},
-		{"data.csv", "text/csv"},
-		{"archive.zip", "application/zip"},
-		{"unknown.xyz", "application/octet-stream"},
-		{"noextension", "application/octet-stream"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.path, func(t *testing.T) {
-			result := handler.getContentType(tt.path)
-			if result != tt.expected {
-				t.Errorf("Expected content type %s for %s, got %s", tt.expected, tt.path, result)
-			}
-		})
-	}
-}
 
 func TestFileHandler_SetS3Headers(t *testing.T) {
 	cfg := config.DefaultConfig()
@@ -338,7 +343,7 @@ func TestFileHandler_SetS3Headers(t *testing.T) {
 	size := int64(100)
 	path := "test.txt"
 
-	handler.setS3Headers(w, etag, modTime, size, path, "")
+	handler.setS3Headers(w, etag, modTime, size, path, "text/plain")
 
 	// Check x-amz-request-id header (should be set to some value)
 	if w.Header().Get("x-amz-request-id") == "" {

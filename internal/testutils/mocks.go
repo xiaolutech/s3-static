@@ -2,6 +2,7 @@ package testutils
 
 import (
 	"errors"
+	"strings"
 	"sync"
 	"time"
 
@@ -99,6 +100,46 @@ func (m *MockStorage) FileExists(path string) bool {
 	return exists
 }
 
+
+
+func detectMockContentType(path string) string {
+	ext := strings.ToLower(path[strings.LastIndex(path, ".")+1:])
+	switch ext {
+	case "html", "htm":
+		return "text/html"
+	case "css":
+		return "text/css"
+	case "js":
+		return "application/javascript"
+	case "json":
+		return "application/json"
+	case "txt":
+		return "text/plain"
+	case "md":
+		return "text/markdown"
+	case "xml":
+		return "application/xml"
+	case "csv":
+		return "text/csv"
+	case "zip":
+		return "application/zip"
+	case "png":
+		return "image/png"
+	case "jpg", "jpeg":
+		return "image/jpeg"
+	case "gif":
+		return "image/gif"
+	case "svg":
+		return "image/svg+xml"
+	case "pdf":
+		return "application/pdf"
+	case "webm":
+		return "video/webm"
+	default:
+		return "application/octet-stream"
+	}
+}
+
 // AddFile adds a file to the mock storage
 func (m *MockStorage) AddFile(path string, content []byte, modTime time.Time, etag string) {
 	if etag == "" {
@@ -109,11 +150,12 @@ func (m *MockStorage) AddFile(path string, content []byte, modTime time.Time, et
 	defer m.mu.Unlock()
 
 	m.files[path] = &interfaces.FileInfo{
-		Path:    path,
-		Size:    int64(len(content)),
-		ModTime: modTime,
-		IsDir:   false,
-		ETag:    etag,
+		Path:        path,
+		Size:        int64(len(content)),
+		ModTime:     modTime,
+		IsDir:       false,
+		ETag:        etag,
+		ContentType: detectMockContentType(path),
 	}
 	m.data[path] = content
 }

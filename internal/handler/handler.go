@@ -124,12 +124,11 @@ func (h *FileHandler) setS3Headers(w http.ResponseWriter, etag string, modTime t
 	// 根据配置的缓存策略设置 Cache-Control 头
 	h.setCacheControlHeader(w, path)
 
-	// 内容相关头
 	w.Header().Set("Content-Length", strconv.FormatInt(size, 10))
 	if contentType != "" {
 		w.Header().Set("Content-Type", contentType)
 	} else {
-		w.Header().Set("Content-Type", h.getContentType(path))
+		w.Header().Set("Content-Type", "application/octet-stream")
 	}
 	w.Header().Set("Accept-Ranges", "bytes")
 
@@ -164,48 +163,7 @@ func (h *FileHandler) setCacheControlHeader(w http.ResponseWriter, path string) 
 	}
 }
 
-// getContentType determines the content type based on file extension
-func (h *FileHandler) getContentType(path string) string {
-	// Handle files without extensions
-	if !strings.Contains(path, ".") {
-		return "application/octet-stream"
-	}
 
-	// Simple content type detection based on file extension
-	ext := strings.ToLower(path[strings.LastIndex(path, ".")+1:])
-	switch ext {
-	case "html", "htm":
-		return "text/html"
-	case "css":
-		return "text/css"
-	case "js":
-		return "application/javascript"
-	case "json":
-		return "application/json"
-	case "txt":
-		return "text/plain"
-	case "md":
-		return "text/markdown"
-	case "xml":
-		return "application/xml"
-	case "csv":
-		return "text/csv"
-	case "zip":
-		return "application/zip"
-	case "png":
-		return "image/png"
-	case "jpg", "jpeg":
-		return "image/jpeg"
-	case "gif":
-		return "image/gif"
-	case "svg":
-		return "image/svg+xml"
-	case "pdf":
-		return "application/pdf"
-	default:
-		return "application/octet-stream"
-	}
-}
 
 // handleStorageError handles storage-related errors
 func (h *FileHandler) handleStorageError(w http.ResponseWriter, err error, path string) {
