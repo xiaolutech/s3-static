@@ -263,8 +263,8 @@ func TestFileHandler_ComprehensiveScenarios(t *testing.T) {
 			t.Errorf("Expected GetFileInfo to be called once, got %d", storage.GetCallCount("GetFileInfo"))
 		}
 
-		if storage.GetCallCount("ReadFile") != 1 {
-			t.Errorf("Expected ReadFile to be called once, got %d", storage.GetCallCount("ReadFile"))
+		if storage.GetCallCount("GetFileReader") != 1 {
+			t.Errorf("Expected GetFileReader to be called once, got %d", storage.GetCallCount("GetFileReader"))
 		}
 
 		// FileExists should not be called in normal flow
@@ -300,9 +300,9 @@ func TestFileHandler_ComprehensiveScenarios(t *testing.T) {
 			t.Errorf("Expected GetFileInfo to be called once for conditional request, got %d", storage.GetCallCount("GetFileInfo"))
 		}
 
-		// Should NOT call ReadFile for 304 response
-		if storage.GetCallCount("ReadFile") != 0 {
-			t.Errorf("Expected ReadFile not to be called for 304 response, got %d", storage.GetCallCount("ReadFile"))
+		// Should NOT call GetFileReader for 304 response
+		if storage.GetCallCount("GetFileReader") != 0 {
+			t.Errorf("Expected GetFileReader not to be called for 304 response, got %d", storage.GetCallCount("GetFileReader"))
 		}
 
 		if w2.Code != http.StatusNotModified {

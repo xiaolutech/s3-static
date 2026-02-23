@@ -1,6 +1,7 @@
 package interfaces
 
 import (
+	"io"
 	"time"
 )
 
@@ -21,6 +22,9 @@ type Storage interface {
 
 	// ReadFile reads the entire file content
 	ReadFile(path string) ([]byte, error)
+
+	// GetFileReader returns an io.ReadSeekCloser for the given path
+	GetFileReader(path string) (io.ReadSeekCloser, error)
 
 	// FileExists checks if a file exists at the given path
 	FileExists(path string) bool

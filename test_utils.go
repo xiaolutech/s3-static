@@ -388,6 +388,26 @@ func (m *MockStorage) ReadFile(path string) ([]byte, error) {
 	}
 }
 
+type mockReadSeekCloser struct {
+	*bytes.Reader
+}
+
+func (m *mockReadSeekCloser) Close() error {
+	return nil
+}
+
+// GetFileReader implements interfaces.Storage
+func (m *MockStorage) GetFileReader(path string) (io.ReadSeekCloser, error) {
+	if data, exists := m.data[path]; exists {
+		return &mockReadSeekCloser{bytes.NewReader(data)}, nil
+	}
+	return nil, &storage.StorageError{
+		Type:    storage.ErrorNotFound,
+		Message: "file not found",
+		Path:    path,
+	}
+}
+
 // FileExists implements interfaces.Storage
 func (m *MockStorage) FileExists(path string) bool {
 	_, exists := m.files[path]

@@ -1,6 +1,8 @@
 package handler
 
 import (
+	"bytes"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"s3-static/internal/storage"
@@ -76,6 +78,21 @@ func (m *mockStorage) GetFileInfo(path string) (*interfaces.FileInfo, error) {
 func (m *mockStorage) ReadFile(path string) ([]byte, error) {
 	if data, exists := m.data[path]; exists {
 		return data, nil
+	}
+	return nil, &storage.StorageError{Type: storage.ErrorNotFound, Message: "file not found"}
+}
+
+type mockReadSeekCloser struct {
+	*bytes.Reader
+}
+
+func (m *mockReadSeekCloser) Close() error {
+	return nil
+}
+
+func (m *mockStorage) GetFileReader(path string) (io.ReadSeekCloser, error) {
+	if data, exists := m.data[path]; exists {
+		return &mockReadSeekCloser{bytes.NewReader(data)}, nil
 	}
 	return nil, &storage.StorageError{Type: storage.ErrorNotFound, Message: "file not found"}
 }

@@ -4,7 +4,6 @@ import (
 	"crypto/rand"
 	"fmt"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
@@ -63,19 +62,19 @@ func (h *FileHandler) handleGetObject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Read file content
-	content, err := h.storage.ReadFile(path)
+	// Get file stream
+	stream, err := h.storage.GetFileReader(path)
 	if err != nil {
 		h.handleStorageError(w, err, path)
 		return
 	}
+	defer stream.Close()
 
 	// Set S3 compatible headers
 	h.setS3Headers(w, etag, fileInfo.ModTime, fileInfo.Size, path, fileInfo.ContentType)
 
-	// Write response
-	w.WriteHeader(http.StatusOK)
-	w.Write(content)
+	// Write response using ServeContent to support Range requests
+	http.ServeContent(w, r, path, fileInfo.ModTime, stream)
 
 	h.logger.Info("File served",
 		"path", path,
@@ -124,7 +123,6 @@ func (h *FileHandler) setS3Headers(w http.ResponseWriter, etag string, modTime t
 	// 根据配置的缓存策略设置 Cache-Control 头
 	h.setCacheControlHeader(w, path)
 
-	w.Header().Set("Content-Length", strconv.FormatInt(size, 10))
 	if contentType != "" {
 		w.Header().Set("Content-Type", contentType)
 	} else {

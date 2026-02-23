@@ -1,6 +1,8 @@
 package interfaces
 
 import (
+	"bytes"
+	"io"
 	"testing"
 	"time"
 )
@@ -108,6 +110,21 @@ func (m *MockStorage) GetFileInfo(path string) (*FileInfo, error) {
 func (m *MockStorage) ReadFile(path string) ([]byte, error) {
 	if data, exists := m.data[path]; exists {
 		return data, nil
+	}
+	return nil, &MockError{message: "file not found"}
+}
+
+type mockReadSeekCloser struct {
+	*bytes.Reader
+}
+
+func (m *mockReadSeekCloser) Close() error {
+	return nil
+}
+
+func (m *MockStorage) GetFileReader(path string) (io.ReadSeekCloser, error) {
+	if data, exists := m.data[path]; exists {
+		return &mockReadSeekCloser{bytes.NewReader(data)}, nil
 	}
 	return nil, &MockError{message: "file not found"}
 }

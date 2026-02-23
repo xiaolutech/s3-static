@@ -98,6 +98,20 @@ func (s *S3Storage) ReadFile(path string) ([]byte, error) {
 	return data, nil
 }
 
+// GetFileReader returns an io.ReadSeekCloser for the given path
+func (s *S3Storage) GetFileReader(path string) (io.ReadSeekCloser, error) {
+	// Remove leading slash if present
+	key := strings.TrimPrefix(path, "/")
+
+	ctx := context.Background()
+	object, err := s.client.GetObject(ctx, s.bucket, key, minio.GetObjectOptions{})
+	if err != nil {
+		return nil, MapMinIOError(err, path)
+	}
+
+	return object, nil
+}
+
 // FileExists checks if a file exists at the given path
 func (s *S3Storage) FileExists(path string) bool {
 	// Remove leading slash if present

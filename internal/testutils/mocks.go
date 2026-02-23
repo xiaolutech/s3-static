@@ -1,7 +1,9 @@
 package testutils
 
 import (
+	"bytes"
 	"errors"
+	"io"
 	"strings"
 	"sync"
 	"time"
@@ -77,6 +79,41 @@ func (m *MockStorage) ReadFile(path string) ([]byte, error) {
 
 	if data, exists := m.data[path]; exists {
 		return data, nil
+	}
+
+	return nil, errors.New("file not found")
+}
+
+// mockReadSeekCloser implements io.ReadSeekCloser for testing
+type mockReadSeekCloser struct {
+	*bytes.Reader
+}
+
+func (m *mockReadSeekCloser) Close() error {
+	return nil
+}
+
+// GetFileReader implements interfaces.Storage
+func (m *MockStorage) GetFileReader(path string) (io.ReadSeekCloser, error) {
+	m.mu.Lock()
+	m.callCounts["GetFileReader"]++
+	shouldFail := m.shouldFail
+	failureError := m.failureError
+	m.mu.Unlock()
+
+	if shouldFail {
+		return nil, failureError
+	}
+
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	if err, exists := m.errors[path]; exists {
+		return nil, err
+	}
+
+	if data, exists := m.data[path]; exists {
+		return &mockReadSeekCloser{bytes.NewReader(data)}, nil
 	}
 
 	return nil, errors.New("file not found")
