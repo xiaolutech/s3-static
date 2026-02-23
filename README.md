@@ -9,6 +9,7 @@ A high-performance, S3-compatible static file service built in Go. This service 
 - **Smart Caching**: Multiple caching strategies (no-cache, max-age, immutable) following HTTP best practices
 - **ETag Support**: Automatic ETag generation and validation for efficient caching
 - **Conditional Requests**: Support for If-None-Match, If-Modified-Since headers
+- **Streaming Support**: Efficient streaming for large files with HTTP Range request support (206 Partial Content)
 - **Health Monitoring**: Built-in health check endpoint
 - **Structured Logging**: Configurable log levels with structured output
 - **Docker Support**: Ready-to-use Docker container
@@ -114,12 +115,15 @@ Serves static files from the configured S3 bucket.
 **Headers:**
 - `If-None-Match`: ETag-based conditional request
 - `If-Modified-Since`: Time-based conditional request
+- `Range`: Byte range request for streaming (e.g., `bytes=0-1023`)
 
 **Response Headers:**
 - `ETag`: File ETag for caching
 - `Last-Modified`: File modification time
 - `Cache-Control`: Caching directives
 - `Content-Type`: MIME type based on file extension
+- `Content-Length`: File size
+- `Content-Range`: Range information (for 206 Partial Content responses)
 
 ### Health Check
 ```
@@ -212,6 +216,7 @@ The service follows a clean architecture pattern with clear separation of concer
 The service is optimized for high-performance static file serving:
 
 - **Efficient Memory Usage**: Streaming file transfers for large files
+- **Range Requests**: HTTP Range support for partial content (206 Partial Content), enables video seeking and chunked downloads
 - **Conditional Requests**: Reduces bandwidth with ETag and Last-Modified support
 - **Connection Pooling**: Reuses S3 connections for better performance
 - **Minimal Allocations**: Optimized code paths to reduce GC pressure
