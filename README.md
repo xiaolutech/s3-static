@@ -1,6 +1,6 @@
 # S3-Compatible Static File Service
 
-A high-performance, S3-compatible static file service built in Go. This service provides efficient static file serving with S3 API compatibility, ETag support, conditional requests, and comprehensive caching.
+A high-performance, S3-compatible static file service built in Go. This service provides efficient static file serving with S3 API compatibility, ETag support, conditional requests, and comprehensive caching. The current S3 client implementation uses AWS SDK for Go v2 and works with S3-compatible backends such as AWS S3 and MinIO.
 
 ## Features
 
