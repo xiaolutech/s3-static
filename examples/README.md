@@ -23,7 +23,7 @@ go run ./examples/s3-usage/
 ### 2. MinIO 头部演示 (`minio-demo/`)
 演示如何直接与 MinIO 交互并检查 HTTP 响应头：
 - 直接 HTTP 请求查看响应头
-- 使用 MinIO SDK 获取对象信息
+- 使用 AWS SDK v2 获取对象信息
 - 比较不同方法获取的元数据
 
 运行方式：
@@ -60,7 +60,7 @@ go run ./examples/minio-demo/
 - **Endpoint**: http://localhost:9000
 - **Access Key**: minioadmin
 - **Secret Key**: minioadmin
-- **Bucket**: test-bucket (s3-usage) / my-bucket (minio-demo)
+- **Bucket**: my-bucket (s3-usage) / test-bucket (minio-demo)
 - **SSL**: 禁用
 
 如需修改配置，请编辑相应示例目录下的 `main.go` 文件。

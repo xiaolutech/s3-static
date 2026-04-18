@@ -17,7 +17,7 @@
 
 去除了原先 `pkg/interfaces/storage.go` 中针对小文件场景设计的 `ReadFile([]byte, error)` 的依赖，新增并使用了 `GetFileReader(path string) (io.ReadSeekCloser, error)`。
 
-S3 对象存储底层实现 `minio.Object` 原本就完美满足了标准库的 `io.ReadSeekCloser` 接口。我们将该指针直接传回 HTTP Handler 层，使其只在实际发起 HTTP 写入操作时才去产生 I/O 请求，而非一次性囤积数据到内存。
+当前实现基于 AWS SDK v2 的 `GetObject` 流封装了一层 seek-compatible reader。底层仍然是标准 S3 `Range` 请求：当 `ServeContent` 触发 `Seek` 时，reader 会按需重新发起带 `Range` 的对象读取，从而对上层继续暴露 `io.ReadSeekCloser` 语义。这样可以在不把整个对象读入内存的前提下，保留视频拖动、断点续传和标准 `206 Partial Content` 支持。
 
 ### 2. 利用 Golang 标准库 `http.ServeContent` 
 
