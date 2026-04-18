@@ -6,21 +6,26 @@ import (
 	"log"
 	"net/http"
 
-	"github.com/minio/minio-go/v7"
-	"github.com/minio/minio-go/v7/pkg/credentials"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/credentials"
+	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
 )
 
 func main() {
-	// 连接到 MinIO
-	minioClient, err := minio.New("localhost:9000", &minio.Options{
-		Creds:  credentials.NewStaticV4("minioadmin", "minioadmin", ""),
-		Secure: false,
-	})
+	cfg, err := awsconfig.LoadDefaultConfig(context.Background(),
+		awsconfig.WithRegion("us-east-1"),
+		awsconfig.WithCredentialsProvider(credentials.NewStaticCredentialsProvider("minioadmin", "minioadmin", "")),
+	)
 	if err != nil {
 		log.Fatalln(err)
 	}
 
-	// 1. 直接 HTTP 请求查看响应头
+	s3Client := awss3.NewFromConfig(cfg, func(o *awss3.Options) {
+		o.UsePathStyle = true
+		o.BaseEndpoint = aws.String("http://localhost:9000")
+	})
+
 	fmt.Println("=== 直接 HTTP 请求 MinIO ===")
 	resp, err := http.Get("http://localhost:9000/test-bucket/test-file.txt")
 	if err != nil {
@@ -35,16 +40,19 @@ func main() {
 		resp.Body.Close()
 	}
 
-	// 2. 使用 MinIO SDK 获取对象信息
-	fmt.Println("\n=== 使用 MinIO SDK ===")
-	ctx := context.Background()
-	objInfo, err := minioClient.StatObject(ctx, "test-bucket", "test-file.txt", minio.StatObjectOptions{})
+	fmt.Println("\n=== 使用 AWS SDK v2 ===")
+	objInfo, err := s3Client.HeadObject(context.Background(), &awss3.HeadObjectInput{
+		Bucket: aws.String("test-bucket"),
+		Key:    aws.String("test-file.txt"),
+	})
 	if err != nil {
-		log.Printf("StatObject 失败: %v", err)
+		log.Printf("HeadObject 失败: %v", err)
 	} else {
-		fmt.Printf("ETag: %s\n", objInfo.ETag)
-		fmt.Printf("Size: %d\n", objInfo.Size)
-		fmt.Printf("LastModified: %s\n", objInfo.LastModified)
-		fmt.Printf("ContentType: %s\n", objInfo.ContentType)
+		fmt.Printf("ETag: %s\n", aws.ToString(objInfo.ETag))
+		fmt.Printf("Size: %d\n", aws.ToInt64(objInfo.ContentLength))
+		if objInfo.LastModified != nil {
+			fmt.Printf("LastModified: %s\n", objInfo.LastModified.String())
+		}
+		fmt.Printf("ContentType: %s\n", aws.ToString(objInfo.ContentType))
 	}
 }
