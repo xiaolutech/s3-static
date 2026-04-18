@@ -49,6 +49,9 @@ func NewS3Storage(cfg S3Config) (*S3Storage, error) {
 	client := awss3.NewFromConfig(awsCfg, func(o *awss3.Options) {
 		o.UsePathStyle = true
 		o.BaseEndpoint = aws.String(endpoint)
+		o.ResponseChecksumValidation = aws.ResponseChecksumValidationWhenRequired
+		o.RequestChecksumCalculation = aws.RequestChecksumCalculationWhenRequired
+		o.DisableLogOutputChecksumValidationSkipped = true
 	})
 
 	storage := &S3Storage{
