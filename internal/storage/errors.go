@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/minio/minio-go/v7"
+	"github.com/aws/smithy-go"
 )
 
 // StorageError represents different types of storage errors
@@ -71,54 +71,27 @@ func (et ErrorType) ToHTTPStatus() int {
 	}
 }
 
-// MapMinIOError converts MinIO errors to storage errors
-func MapMinIOError(err error, path string) error {
+// MapS3Error converts AWS S3 errors to storage errors.
+func MapS3Error(err error, path string) error {
 	if err == nil {
 		return nil
 	}
 
-	// Check if it's a MinIO error response
-	var minioErr minio.ErrorResponse
-	if errors.As(err, &minioErr) {
-		switch minioErr.Code {
-		case "NoSuchKey", "NoSuchBucket":
-			return &StorageError{
-				Type:    ErrorNotFound,
-				Message: "Object not found",
-				Path:    path,
-				Err:     err,
-			}
-		case "AccessDenied":
-			return &StorageError{
-				Type:    ErrorForbidden,
-				Message: "Access denied",
-				Path:    path,
-				Err:     err,
-			}
+	var apiErr smithy.APIError
+	if errors.As(err, &apiErr) {
+		switch apiErr.ErrorCode() {
+		case "NoSuchKey", "NoSuchBucket", "NotFound":
+			return &StorageError{Type: ErrorNotFound, Message: "Object not found", Path: path, Err: err}
+		case "AccessDenied", "InvalidAccessKeyId", "SignatureDoesNotMatch":
+			return &StorageError{Type: ErrorForbidden, Message: "Access denied", Path: path, Err: err}
 		case "InvalidRequest", "InvalidArgument":
-			return &StorageError{
-				Type:    ErrorBadRequest,
-				Message: "Invalid request",
-				Path:    path,
-				Err:     err,
-			}
+			return &StorageError{Type: ErrorBadRequest, Message: "Invalid request", Path: path, Err: err}
 		default:
-			return &StorageError{
-				Type:    ErrorInternalServer,
-				Message: fmt.Sprintf("S3 error: %s", minioErr.Code),
-				Path:    path,
-				Err:     err,
-			}
+			return &StorageError{Type: ErrorInternalServer, Message: fmt.Sprintf("S3 error: %s", apiErr.ErrorCode()), Path: path, Err: err}
 		}
 	}
 
-	// For other types of errors (network, etc.)
-	return &StorageError{
-		Type:    ErrorInternalServer,
-		Message: "Storage operation failed",
-		Path:    path,
-		Err:     err,
-	}
+	return &StorageError{Type: ErrorInternalServer, Message: "Storage operation failed", Path: path, Err: err}
 }
 
 // IsNotFound checks if the error is a not found error

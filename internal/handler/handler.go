@@ -61,35 +61,48 @@ func (h *FileHandler) handleGetObject(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), storageRequestTimeout)
 	defer cancel()
 
-	fileInfo, err := h.getFileInfo(ctx, path)
+	if h.hasConditionalHeaders(r) {
+		fileInfo, err := h.getFileInfo(ctx, path)
+		if err != nil {
+			h.handleStorageError(w, err, path)
+			return
+		}
+
+		etag := fileInfo.ETag
+		h.setConditionalHeaders(w, etag, fileInfo.ModTime, path)
+		if h.checkConditionalRequest(r, etag, fileInfo.ModTime) {
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+	}
+
+	openedFile, err := h.openFile(ctx, path)
 	if err != nil {
 		h.handleStorageError(w, err, path)
 		return
 	}
+	defer func() {
+		if openedFile.Reader != nil {
+			openedFile.Reader.Close()
+		}
+	}()
 
+	fileInfo := openedFile.Info
 	etag := fileInfo.ETag
 	h.setConditionalHeaders(w, etag, fileInfo.ModTime, path)
 
-	if h.checkConditionalRequest(r, etag, fileInfo.ModTime) {
-		w.WriteHeader(http.StatusNotModified)
-		return
-	}
-
-	stream, err := h.getFileReader(ctx, path)
-	if err != nil {
-		h.handleStorageError(w, err, path)
-		return
-	}
-	defer stream.Close()
-
 	h.setS3Headers(w, etag, fileInfo.ModTime, fileInfo.Size, path, fileInfo.ContentType)
-	http.ServeContent(w, r, path, fileInfo.ModTime, stream)
+	http.ServeContent(w, r, path, fileInfo.ModTime, openedFile.Reader)
 
 	h.logger.Debug("File served",
 		"path", path,
 		"size", fileInfo.Size,
 		"etag", etag,
 	)
+}
+
+func (h *FileHandler) hasConditionalHeaders(r *http.Request) bool {
+	return r.Header.Get("If-None-Match") != "" || r.Header.Get("If-Modified-Since") != ""
 }
 
 // checkConditionalRequest checks if the request should return 304 Not Modified
@@ -130,6 +143,27 @@ func (h *FileHandler) getFileReader(ctx context.Context, path string) (io.ReadSe
 		return storageWithContext.GetFileReaderContext(ctx, path)
 	}
 	return h.storage.GetFileReader(path)
+}
+
+func (h *FileHandler) openFile(ctx context.Context, path string) (*interfaces.OpenedFile, error) {
+	if opener, ok := h.storage.(interfaces.FileOpener); ok {
+		return opener.OpenFileContext(ctx, path)
+	}
+
+	fileInfo, err := h.getFileInfo(ctx, path)
+	if err != nil {
+		return nil, err
+	}
+
+	reader, err := h.getFileReader(ctx, path)
+	if err != nil {
+		return nil, err
+	}
+
+	return &interfaces.OpenedFile{
+		Info:   fileInfo,
+		Reader: reader,
+	}, nil
 }
 
 func (h *FileHandler) setConditionalHeaders(w http.ResponseWriter, etag string, modTime time.Time, path string) {
@@ -184,8 +218,6 @@ func (h *FileHandler) setCacheControlHeader(w http.ResponseWriter, path string) 
 		w.Header().Set("Cache-Control", "no-cache")
 	}
 }
-
-
 
 // handleStorageError handles storage-related errors
 func (h *FileHandler) handleStorageError(w http.ResponseWriter, err error, path string) {

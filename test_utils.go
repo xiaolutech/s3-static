@@ -16,8 +16,10 @@ import (
 	"s3-static/internal/storage"
 	"s3-static/pkg/interfaces"
 
-	"github.com/minio/minio-go/v7"
-	"github.com/minio/minio-go/v7/pkg/credentials"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/credentials"
+	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 )
@@ -29,7 +31,52 @@ type TestSuite struct {
 	Handler   *handler.FileHandler
 	Config    *config.Config
 	Logger    *config.Logger
-	Client    *minio.Client
+	Client    *awss3.Client
+}
+
+func newAWSClient(ctx context.Context, endpoint string, useSSL bool) (*awss3.Client, error) {
+	normalized, err := normalizeEndpoint(endpoint, useSSL)
+	if err != nil {
+		return nil, err
+	}
+
+	cfg, err := awsconfig.LoadDefaultConfig(ctx,
+		awsconfig.WithRegion("us-east-1"),
+		awsconfig.WithCredentialsProvider(credentials.NewStaticCredentialsProvider("minioadmin", "minioadmin", "")),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return awss3.NewFromConfig(cfg, func(o *awss3.Options) {
+		o.UsePathStyle = true
+		o.BaseEndpoint = aws.String(normalized)
+	}), nil
+}
+
+func normalizeEndpoint(endpoint string, useSSL bool) (string, error) {
+	if strings.HasPrefix(endpoint, "http://") || strings.HasPrefix(endpoint, "https://") {
+		return endpoint, nil
+	}
+	if useSSL {
+		return "https://" + endpoint, nil
+	}
+	return "http://" + endpoint, nil
+}
+
+func createBucket(ctx context.Context, client *awss3.Client, bucket string) error {
+	_, err := client.CreateBucket(ctx, &awss3.CreateBucketInput{Bucket: aws.String(bucket)})
+	return err
+}
+
+func putObject(ctx context.Context, client *awss3.Client, bucket, key, content, contentType string) error {
+	_, err := client.PutObject(ctx, &awss3.PutObjectInput{
+		Bucket:      aws.String(bucket),
+		Key:         aws.String(key),
+		Body:        strings.NewReader(content),
+		ContentType: aws.String(contentType),
+	})
+	return err
 }
 
 // SetupTestSuite creates a complete test environment with MinIO container
@@ -69,19 +116,13 @@ func SetupTestSuite(t *testing.T) *TestSuite {
 
 	endpoint := fmt.Sprintf("%s:%s", host, port.Port())
 
-	// Create MinIO client
-	client, err := minio.New(endpoint, &minio.Options{
-		Creds:  credentials.NewStaticV4("minioadmin", "minioadmin", ""),
-		Secure: false,
-		Region: "us-east-1",
-	})
+	client, err := newAWSClient(ctx, endpoint, false)
 	if err != nil {
-		t.Fatalf("Failed to create MinIO client: %v", err)
+		t.Fatalf("Failed to create S3 client: %v", err)
 	}
 
-	// Create test bucket
 	bucketName := "test-bucket"
-	err = client.MakeBucket(ctx, bucketName, minio.MakeBucketOptions{})
+	err = createBucket(ctx, client, bucketName)
 	if err != nil {
 		t.Fatalf("Failed to create test bucket: %v", err)
 	}
@@ -167,19 +208,13 @@ func SetupTestSuiteWithEnv(t *testing.T, envVars map[string]string) *TestSuite {
 
 	endpoint := fmt.Sprintf("%s:%s", host, port.Port())
 
-	// Create MinIO client
-	client, err := minio.New(endpoint, &minio.Options{
-		Creds:  credentials.NewStaticV4("minioadmin", "minioadmin", ""),
-		Secure: false,
-		Region: "us-east-1",
-	})
+	client, err := newAWSClient(ctx, endpoint, false)
 	if err != nil {
-		t.Fatalf("Failed to create MinIO client: %v", err)
+		t.Fatalf("Failed to create S3 client: %v", err)
 	}
 
-	// Create test bucket
 	bucketName := "test-bucket"
-	err = client.MakeBucket(ctx, bucketName, minio.MakeBucketOptions{})
+	err = createBucket(ctx, client, bucketName)
 	if err != nil {
 		t.Fatalf("Failed to create test bucket: %v", err)
 	}
@@ -254,7 +289,7 @@ func (ts *TestSuite) Cleanup() {
 	}
 }
 
-	// UploadTestFile uploads a test file to the MinIO container
+// UploadTestFile uploads a test file to the MinIO container
 func (ts *TestSuite) UploadTestFile(key, content string) error {
 	contentType := "application/octet-stream"
 	if strings.HasSuffix(key, ".html") {
@@ -283,20 +318,12 @@ func (ts *TestSuite) UploadTestFile(key, content string) error {
 		contentType = "application/zip"
 	}
 
-	_, err := ts.Client.PutObject(context.TODO(), ts.Config.BucketName, key,
-		strings.NewReader(content), int64(len(content)), minio.PutObjectOptions{
-			ContentType: contentType,
-		})
-	return err
+	return putObject(context.TODO(), ts.Client, ts.Config.BucketName, key, content, contentType)
 }
 
 // UploadTestFileWithContentType uploads a test file with specific content type
 func (ts *TestSuite) UploadTestFileWithContentType(key, content, contentType string) error {
-	_, err := ts.Client.PutObject(context.TODO(), ts.Config.BucketName, key,
-		strings.NewReader(content), int64(len(content)), minio.PutObjectOptions{
-			ContentType: contentType,
-		})
-	return err
+	return putObject(context.TODO(), ts.Client, ts.Config.BucketName, key, content, contentType)
 }
 
 // CreateTestRequest creates an HTTP test request

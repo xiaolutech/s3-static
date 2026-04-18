@@ -181,6 +181,56 @@ func TestIntegration_WebMContentType(t *testing.T) {
 	suite.AssertHeader(t, w, "Content-Type", contentType)
 }
 
+func TestIntegration_HEADRequest(t *testing.T) {
+	suite := SetupTestSuite(t)
+	defer suite.Cleanup()
+
+	err := suite.UploadTestFile("head.txt", "Hello, HEAD!")
+	if err != nil {
+		t.Fatalf("Failed to upload test file: %v", err)
+	}
+
+	req := suite.CreateTestRequest(http.MethodHead, "/head.txt", nil)
+	w := suite.ExecuteRequest(req)
+
+	suite.AssertStatusCode(t, w, http.StatusOK)
+	if w.Body.Len() != 0 {
+		t.Fatalf("Expected empty body for HEAD, got %q", w.Body.String())
+	}
+	suite.AssertHeaderExists(t, w, "ETag")
+	suite.AssertHeaderExists(t, w, "Last-Modified")
+	suite.AssertHeaderExists(t, w, "Content-Length")
+}
+
+func TestIntegration_RangeRequests(t *testing.T) {
+	suite := SetupTestSuite(t)
+	defer suite.Cleanup()
+
+	content := "Hello, Range Requests!"
+	err := suite.UploadTestFile("range.txt", content)
+	if err != nil {
+		t.Fatalf("Failed to upload test file: %v", err)
+	}
+
+	t.Run("partial content", func(t *testing.T) {
+		req := suite.CreateTestRequest(http.MethodGet, "/range.txt", nil)
+		req.Header.Set("Range", "bytes=0-4")
+		w := suite.ExecuteRequest(req)
+
+		suite.AssertStatusCode(t, w, http.StatusPartialContent)
+		suite.AssertBodyEquals(t, w, "Hello")
+		suite.AssertHeader(t, w, "Content-Range", "bytes 0-4/22")
+	})
+
+	t.Run("invalid range", func(t *testing.T) {
+		req := suite.CreateTestRequest(http.MethodGet, "/range.txt", nil)
+		req.Header.Set("Range", "bytes=100-200")
+		w := suite.ExecuteRequest(req)
+
+		suite.AssertStatusCode(t, w, http.StatusRequestedRangeNotSatisfiable)
+	})
+}
+
 func TestIntegration_S3Headers(t *testing.T) {
 	suite := SetupTestSuite(t)
 	defer suite.Cleanup()
@@ -209,6 +259,30 @@ func TestIntegration_S3Headers(t *testing.T) {
 	suite.AssertHeaderExists(t, w, "Access-Control-Expose-Headers")
 }
 
+func TestIntegration_NotModifiedHeaders(t *testing.T) {
+	suite := SetupTestSuite(t)
+	defer suite.Cleanup()
+
+	err := suite.UploadTestFile("validators.txt", "validator content")
+	if err != nil {
+		t.Fatalf("Failed to upload test file: %v", err)
+	}
+
+	req1 := suite.CreateTestRequest(http.MethodGet, "/validators.txt", nil)
+	w1 := suite.ExecuteRequest(req1)
+	suite.AssertStatusCode(t, w1, http.StatusOK)
+
+	etag := w1.Header().Get("ETag")
+	req2 := suite.CreateTestRequest(http.MethodGet, "/validators.txt", nil)
+	req2.Header.Set("If-None-Match", etag)
+	w2 := suite.ExecuteRequest(req2)
+
+	suite.AssertStatusCode(t, w2, http.StatusNotModified)
+	suite.AssertHeader(t, w2, "ETag", etag)
+	suite.AssertHeaderExists(t, w2, "Last-Modified")
+	suite.AssertHeaderExists(t, w2, "Cache-Control")
+}
+
 func TestIntegration_ErrorHandling(t *testing.T) {
 	suite := SetupTestSuite(t)
 	defer suite.Cleanup()
@@ -223,11 +297,28 @@ func TestIntegration_ErrorHandling(t *testing.T) {
 		suite.AssertBodyContains(t, w, "<Error>")
 		suite.AssertBodyContains(t, w, "<Code>")
 		suite.AssertBodyContains(t, w, "<Message>")
+
+		requestID := w.Header().Get("x-amz-request-id")
+		if requestID == "" {
+			t.Fatal("Expected x-amz-request-id header")
+		}
+		if !strings.Contains(w.Body.String(), "<RequestId>"+requestID+"</RequestId>") {
+			t.Fatalf("Expected error XML to reuse request id %s, got %s", requestID, w.Body.String())
+		}
 	})
 
 	// Test empty path
 	t.Run("empty_path", func(t *testing.T) {
 		req := suite.CreateTestRequest("GET", "/", nil)
+		w := suite.ExecuteRequest(req)
+
+		suite.AssertStatusCode(t, w, http.StatusBadRequest)
+		suite.AssertBodyContains(t, w, "InvalidRequest")
+	})
+
+	// Test invalid normalized path
+	t.Run("invalid_path", func(t *testing.T) {
+		req := suite.CreateTestRequest("GET", "/folder/../secret.txt", nil)
 		w := suite.ExecuteRequest(req)
 
 		suite.AssertStatusCode(t, w, http.StatusBadRequest)
@@ -341,7 +432,7 @@ func TestIntegration_CacheStrategies(t *testing.T) {
 			// Check cache strategy is applied correctly
 			cacheControl := w.Header().Get("Cache-Control")
 			if cacheControl != tc.expectedCacheHeader {
-				t.Errorf("%s: Expected Cache-Control '%s', got '%s'", 
+				t.Errorf("%s: Expected Cache-Control '%s', got '%s'",
 					tc.description, tc.expectedCacheHeader, cacheControl)
 			}
 

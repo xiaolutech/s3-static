@@ -4,13 +4,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/minio/minio-go/v7"
-	"github.com/minio/minio-go/v7/pkg/credentials"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/credentials"
+	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 )
@@ -58,18 +61,12 @@ func setupMinIOContainer(t *testing.T) (testcontainers.Container, *S3Storage) {
 
 	endpoint := fmt.Sprintf("%s:%s", host, port.Port())
 
-	// Create MinIO client first to create bucket
-	client, err := minio.New(endpoint, &minio.Options{
-		Creds:  credentials.NewStaticV4(testAccessKey, testSecretKey, ""),
-		Secure: false,
-		Region: "us-east-1",
-	})
+	client, err := newTestS3Client(ctx, endpoint)
 	if err != nil {
-		t.Fatalf("Failed to create MinIO client: %v", err)
+		t.Fatalf("Failed to create S3 client: %v", err)
 	}
 
-	// Create test bucket
-	err = createBucket(client, testBucket)
+	err = createBucket(ctx, client, testBucket)
 	if err != nil {
 		t.Fatalf("Failed to create test bucket: %v", err)
 	}
@@ -92,14 +89,34 @@ func setupMinIOContainer(t *testing.T) (testcontainers.Container, *S3Storage) {
 	return minioContainer, storage
 }
 
+func newTestS3Client(ctx context.Context, endpoint string) (*awss3.Client, error) {
+	cfg, err := awsconfig.LoadDefaultConfig(ctx,
+		awsconfig.WithRegion("us-east-1"),
+		awsconfig.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(testAccessKey, testSecretKey, "")),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return awss3.NewFromConfig(cfg, func(o *awss3.Options) {
+		o.UsePathStyle = true
+		o.BaseEndpoint = aws.String("http://" + endpoint)
+	}), nil
+}
+
 // createBucket creates a bucket for testing
-func createBucket(client *minio.Client, bucket string) error {
-	return client.MakeBucket(context.TODO(), bucket, minio.MakeBucketOptions{})
+func createBucket(ctx context.Context, client *awss3.Client, bucket string) error {
+	_, err := client.CreateBucket(ctx, &awss3.CreateBucketInput{Bucket: aws.String(bucket)})
+	return err
 }
 
 // putTestObject uploads a test object to S3
-func putTestObject(client *minio.Client, bucket, key, content string) error {
-	_, err := client.PutObject(context.TODO(), bucket, key, strings.NewReader(content), int64(len(content)), minio.PutObjectOptions{})
+func putTestObject(client *awss3.Client, bucket, key, content string) error {
+	_, err := client.PutObject(context.TODO(), &awss3.PutObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(key),
+		Body:   strings.NewReader(content),
+	})
 	return err
 }
 
@@ -172,6 +189,43 @@ func TestS3Storage_ReadFile(t *testing.T) {
 
 	if string(data) != testContent {
 		t.Errorf("Expected content %s, got %s", testContent, string(data))
+	}
+}
+
+func TestS3Storage_OpenFileContext(t *testing.T) {
+	container, storage := setupMinIOContainer(t)
+	defer container.Terminate(context.Background())
+
+	testKey := "open-file.txt"
+	testContent := "Hello from OpenFileContext"
+
+	err := putTestObject(storage.client, testBucket, testKey, testContent)
+	if err != nil {
+		t.Fatalf("Failed to upload test file: %v", err)
+	}
+
+	opened, err := storage.OpenFileContext(context.Background(), testKey)
+	if err != nil {
+		t.Fatalf("OpenFileContext failed: %v", err)
+	}
+	defer opened.Reader.Close()
+
+	if opened.Info.Path != testKey {
+		t.Fatalf("Expected path %s, got %s", testKey, opened.Info.Path)
+	}
+	if opened.Info.Size != int64(len(testContent)) {
+		t.Fatalf("Expected size %d, got %d", len(testContent), opened.Info.Size)
+	}
+	if opened.Info.ETag == "" {
+		t.Fatal("Expected ETag to be populated")
+	}
+
+	data, err := io.ReadAll(opened.Reader)
+	if err != nil {
+		t.Fatalf("Failed to read opened reader: %v", err)
+	}
+	if string(data) != testContent {
+		t.Fatalf("Expected content %s, got %s", testContent, string(data))
 	}
 }
 

@@ -2,6 +2,7 @@ package handler
 
 import (
 	"bytes"
+	"context"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -20,14 +21,19 @@ type mockStorage struct {
 	data  map[string][]byte
 }
 
+type openFileMockStorage struct {
+	*mockStorage
+	openCalls int
+	infoCalls int
+	readCalls int
+}
+
 func newMockStorage() *mockStorage {
 	return &mockStorage{
 		files: make(map[string]*interfaces.FileInfo),
 		data:  make(map[string][]byte),
 	}
 }
-
-
 
 func detectTestContentType(path string) string {
 	ext := strings.ToLower(path[strings.LastIndex(path, ".")+1:])
@@ -100,6 +106,29 @@ func (m *mockStorage) GetFileReader(path string) (io.ReadSeekCloser, error) {
 func (m *mockStorage) FileExists(path string) bool {
 	_, exists := m.files[path]
 	return exists
+}
+
+func (m *openFileMockStorage) GetFileInfo(path string) (*interfaces.FileInfo, error) {
+	m.infoCalls++
+	return m.mockStorage.GetFileInfo(path)
+}
+
+func (m *openFileMockStorage) GetFileReader(path string) (io.ReadSeekCloser, error) {
+	m.readCalls++
+	return m.mockStorage.GetFileReader(path)
+}
+
+func (m *openFileMockStorage) OpenFileContext(_ context.Context, path string) (*interfaces.OpenedFile, error) {
+	m.openCalls++
+	info, err := m.mockStorage.GetFileInfo(path)
+	if err != nil {
+		return nil, err
+	}
+	reader, err := m.mockStorage.GetFileReader(path)
+	if err != nil {
+		return nil, err
+	}
+	return &interfaces.OpenedFile{Info: info, Reader: reader}, nil
 }
 
 func (m *mockStorage) addFile(path string, content []byte, modTime time.Time) {
@@ -345,8 +374,6 @@ func TestFileHandler_ServeHTTP_MethodNotAllowed(t *testing.T) {
 		t.Error("Expected MethodNotAllowed error code")
 	}
 }
-
-
 
 func TestFileHandler_SetS3Headers(t *testing.T) {
 	cfg := config.DefaultConfig()
@@ -698,5 +725,34 @@ func TestFileHandler_ErrorRequestIDConsistency(t *testing.T) {
 	}
 	if !strings.Contains(w.Body.String(), "<RequestId>"+requestID+"</RequestId>") {
 		t.Fatalf("Expected response body to reuse header request id %s, got %s", requestID, w.Body.String())
+	}
+}
+
+func TestFileHandler_UsesOpenFileWhenAvailable(t *testing.T) {
+	cfg := config.DefaultConfig()
+	logger := config.NewLogger("info")
+	base := newMockStorage()
+	content := []byte("Hello, OpenFile!")
+	modTime := time.Now().Truncate(time.Second)
+	base.addFile("open.txt", content, modTime)
+	storage := &openFileMockStorage{mockStorage: base}
+	handler := NewFileHandler(storage, cfg, logger)
+
+	req := httptest.NewRequest(http.MethodGet, "/open.txt", nil)
+	w := httptest.NewRecorder()
+
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("Expected status 200, got %d", w.Code)
+	}
+	if storage.openCalls != 1 {
+		t.Fatalf("Expected OpenFileContext to be called once, got %d", storage.openCalls)
+	}
+	if storage.infoCalls != 0 {
+		t.Fatalf("Expected GetFileInfo fallback not to be used, got %d", storage.infoCalls)
+	}
+	if storage.readCalls != 0 {
+		t.Fatalf("Expected GetFileReader fallback not to be used, got %d", storage.readCalls)
 	}
 }
