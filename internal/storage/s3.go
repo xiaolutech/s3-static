@@ -59,10 +59,13 @@ func NewS3Storage(cfg S3Config) (*S3Storage, error) {
 
 // GetFileInfo retrieves file metadata for the given path
 func (s *S3Storage) GetFileInfo(path string) (*interfaces.FileInfo, error) {
-	// Remove leading slash if present
+	return s.GetFileInfoContext(context.Background(), path)
+}
+
+// GetFileInfoContext retrieves file metadata for the given path using the provided context.
+func (s *S3Storage) GetFileInfoContext(ctx context.Context, path string) (*interfaces.FileInfo, error) {
 	key := strings.TrimPrefix(path, "/")
 
-	ctx := context.Background()
 	objInfo, err := s.client.StatObject(ctx, s.bucket, key, minio.StatObjectOptions{})
 	if err != nil {
 		return nil, MapMinIOError(err, path)
@@ -72,18 +75,21 @@ func (s *S3Storage) GetFileInfo(path string) (*interfaces.FileInfo, error) {
 		Path:        path,
 		Size:        objInfo.Size,
 		ModTime:     objInfo.LastModified,
-		IsDir:       false,                           // S3 objects are always files
-		ETag:        strings.Trim(objInfo.ETag, `"`), // Remove quotes from ETag
-		ContentType: objInfo.ContentType,             // Get content type from metadata
+		IsDir:       false,
+		ETag:        strings.Trim(objInfo.ETag, `"`),
+		ContentType: objInfo.ContentType,
 	}, nil
 }
 
 // ReadFile reads the entire file content
 func (s *S3Storage) ReadFile(path string) ([]byte, error) {
-	// Remove leading slash if present
+	return s.ReadFileContext(context.Background(), path)
+}
+
+// ReadFileContext reads the entire file content using the provided context.
+func (s *S3Storage) ReadFileContext(ctx context.Context, path string) ([]byte, error) {
 	key := strings.TrimPrefix(path, "/")
 
-	ctx := context.Background()
 	object, err := s.client.GetObject(ctx, s.bucket, key, minio.GetObjectOptions{})
 	if err != nil {
 		return nil, MapMinIOError(err, path)
@@ -100,10 +106,13 @@ func (s *S3Storage) ReadFile(path string) ([]byte, error) {
 
 // GetFileReader returns an io.ReadSeekCloser for the given path
 func (s *S3Storage) GetFileReader(path string) (io.ReadSeekCloser, error) {
-	// Remove leading slash if present
+	return s.GetFileReaderContext(context.Background(), path)
+}
+
+// GetFileReaderContext returns an io.ReadSeekCloser for the given path using the provided context.
+func (s *S3Storage) GetFileReaderContext(ctx context.Context, path string) (io.ReadSeekCloser, error) {
 	key := strings.TrimPrefix(path, "/")
 
-	ctx := context.Background()
 	object, err := s.client.GetObject(ctx, s.bucket, key, minio.GetObjectOptions{})
 	if err != nil {
 		return nil, MapMinIOError(err, path)
@@ -114,10 +123,13 @@ func (s *S3Storage) GetFileReader(path string) (io.ReadSeekCloser, error) {
 
 // FileExists checks if a file exists at the given path
 func (s *S3Storage) FileExists(path string) bool {
-	// Remove leading slash if present
+	return s.FileExistsContext(context.Background(), path)
+}
+
+// FileExistsContext checks if a file exists at the given path using the provided context.
+func (s *S3Storage) FileExistsContext(ctx context.Context, path string) bool {
 	key := strings.TrimPrefix(path, "/")
 
-	ctx := context.Background()
 	_, err := s.client.StatObject(ctx, s.bucket, key, minio.StatObjectOptions{})
 	return err == nil
 }

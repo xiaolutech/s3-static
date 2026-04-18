@@ -576,3 +576,127 @@ func TestFileHandler_UsesStorageContentType(t *testing.T) {
 		t.Errorf("Expected Content-Type '%s', got '%s'", expectedContentType, w.Header().Get("Content-Type"))
 	}
 }
+
+func TestFileHandler_ServeHTTP_HEAD(t *testing.T) {
+	cfg := config.DefaultConfig()
+	logger := config.NewLogger("info")
+	storage := newMockStorage()
+	handler := NewFileHandler(storage, cfg, logger)
+
+	content := []byte("Hello, HEAD!")
+	modTime := time.Now().Truncate(time.Second)
+	storage.addFile("head.txt", content, modTime)
+
+	req := httptest.NewRequest(http.MethodHead, "/head.txt", nil)
+	w := httptest.NewRecorder()
+
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("Expected status 200, got %d", w.Code)
+	}
+	if w.Body.Len() != 0 {
+		t.Fatalf("Expected empty body for HEAD, got %q", w.Body.String())
+	}
+	if w.Header().Get("Content-Length") != "12" {
+		t.Fatalf("Expected Content-Length 12, got %s", w.Header().Get("Content-Length"))
+	}
+	if w.Header().Get("ETag") == "" {
+		t.Fatal("Expected ETag header for HEAD response")
+	}
+}
+
+func TestFileHandler_RangeRequest(t *testing.T) {
+	cfg := config.DefaultConfig()
+	logger := config.NewLogger("info")
+	storage := newMockStorage()
+	handler := NewFileHandler(storage, cfg, logger)
+
+	content := []byte("Hello, Range!")
+	modTime := time.Now().Truncate(time.Second)
+	storage.addFile("range.txt", content, modTime)
+
+	req := httptest.NewRequest(http.MethodGet, "/range.txt", nil)
+	req.Header.Set("Range", "bytes=0-4")
+	w := httptest.NewRecorder()
+
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusPartialContent {
+		t.Fatalf("Expected status 206, got %d", w.Code)
+	}
+	if w.Body.String() != "Hello" {
+		t.Fatalf("Expected partial body Hello, got %q", w.Body.String())
+	}
+	if got := w.Header().Get("Content-Range"); got != "bytes 0-4/13" {
+		t.Fatalf("Expected Content-Range bytes 0-4/13, got %s", got)
+	}
+}
+
+func TestFileHandler_InvalidRangeRequest(t *testing.T) {
+	cfg := config.DefaultConfig()
+	logger := config.NewLogger("info")
+	storage := newMockStorage()
+	handler := NewFileHandler(storage, cfg, logger)
+
+	content := []byte("Hello, Range!")
+	modTime := time.Now().Truncate(time.Second)
+	storage.addFile("invalid-range.txt", content, modTime)
+
+	req := httptest.NewRequest(http.MethodGet, "/invalid-range.txt", nil)
+	req.Header.Set("Range", "bytes=100-200")
+	w := httptest.NewRecorder()
+
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusRequestedRangeNotSatisfiable {
+		t.Fatalf("Expected status 416, got %d", w.Code)
+	}
+}
+
+func TestFileHandler_NotModifiedStillReturnsValidators(t *testing.T) {
+	cfg := config.DefaultConfig()
+	logger := config.NewLogger("info")
+	storage := newMockStorage()
+	handler := NewFileHandler(storage, cfg, logger)
+
+	content := []byte("Hello, Cache!")
+	modTime := time.Now().Truncate(time.Second)
+	storage.addFile("cache.txt", content, modTime)
+
+	req := httptest.NewRequest(http.MethodGet, "/cache.txt", nil)
+	req.Header.Set("If-None-Match", `"test-etag"`)
+	w := httptest.NewRecorder()
+
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotModified {
+		t.Fatalf("Expected status 304, got %d", w.Code)
+	}
+	if w.Header().Get("ETag") != `"test-etag"` {
+		t.Fatalf("Expected ETag header on 304, got %s", w.Header().Get("ETag"))
+	}
+	if w.Header().Get("Last-Modified") == "" {
+		t.Fatal("Expected Last-Modified header on 304")
+	}
+}
+
+func TestFileHandler_ErrorRequestIDConsistency(t *testing.T) {
+	cfg := config.DefaultConfig()
+	logger := config.NewLogger("info")
+	storage := newMockStorage()
+	handler := NewFileHandler(storage, cfg, logger)
+
+	req := httptest.NewRequest(http.MethodGet, "/missing.txt", nil)
+	w := httptest.NewRecorder()
+
+	handler.ServeHTTP(w, req)
+
+	requestID := w.Header().Get("x-amz-request-id")
+	if requestID == "" {
+		t.Fatal("Expected x-amz-request-id header")
+	}
+	if !strings.Contains(w.Body.String(), "<RequestId>"+requestID+"</RequestId>") {
+		t.Fatalf("Expected response body to reuse header request id %s, got %s", requestID, w.Body.String())
+	}
+}

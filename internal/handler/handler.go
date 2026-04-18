@@ -1,16 +1,24 @@
 package handler
 
 import (
-	"crypto/rand"
+	"context"
 	"fmt"
+	"io"
 	"net/http"
+	pathpkg "path"
+	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"s3-static/internal/config"
 	"s3-static/internal/storage"
 	"s3-static/pkg/interfaces"
 )
+
+const storageRequestTimeout = 30 * time.Second
+
+var requestIDCounter atomic.Uint64
 
 // FileHandler handles HTTP requests for static files
 type FileHandler struct {
@@ -31,7 +39,7 @@ func NewFileHandler(storage interfaces.Storage, cfg *config.Config, logger *conf
 // ServeHTTP handles HTTP requests
 func (h *FileHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
-	case http.MethodGet:
+	case http.MethodGet, http.MethodHead:
 		h.handleGetObject(w, r)
 	default:
 		h.writeErrorResponse(w, http.StatusMethodNotAllowed, "MethodNotAllowed", "Method not allowed")
@@ -45,38 +53,39 @@ func (h *FileHandler) handleGetObject(w http.ResponseWriter, r *http.Request) {
 		h.writeErrorResponse(w, http.StatusBadRequest, "InvalidRequest", "Empty path")
 		return
 	}
+	if cleanedPath := strings.TrimPrefix(pathpkg.Clean("/"+path), "/"); cleanedPath != path {
+		h.writeErrorResponse(w, http.StatusBadRequest, "InvalidRequest", "Invalid path")
+		return
+	}
 
-	// Get file info from storage
-	fileInfo, err := h.storage.GetFileInfo(path)
+	ctx, cancel := context.WithTimeout(r.Context(), storageRequestTimeout)
+	defer cancel()
+
+	fileInfo, err := h.getFileInfo(ctx, path)
 	if err != nil {
 		h.handleStorageError(w, err, path)
 		return
 	}
 
-	// Use ETag from storage (S3 provides this)
 	etag := fileInfo.ETag
+	h.setConditionalHeaders(w, etag, fileInfo.ModTime, path)
 
-	// Check conditional requests
 	if h.checkConditionalRequest(r, etag, fileInfo.ModTime) {
 		w.WriteHeader(http.StatusNotModified)
 		return
 	}
 
-	// Get file stream
-	stream, err := h.storage.GetFileReader(path)
+	stream, err := h.getFileReader(ctx, path)
 	if err != nil {
 		h.handleStorageError(w, err, path)
 		return
 	}
 	defer stream.Close()
 
-	// Set S3 compatible headers
 	h.setS3Headers(w, etag, fileInfo.ModTime, fileInfo.Size, path, fileInfo.ContentType)
-
-	// Write response using ServeContent to support Range requests
 	http.ServeContent(w, r, path, fileInfo.ModTime, stream)
 
-	h.logger.Info("File served",
+	h.logger.Debug("File served",
 		"path", path,
 		"size", fileInfo.Size,
 		"etag", etag,
@@ -109,6 +118,26 @@ func (h *FileHandler) checkConditionalRequest(r *http.Request, etag string, modT
 	return false
 }
 
+func (h *FileHandler) getFileInfo(ctx context.Context, path string) (*interfaces.FileInfo, error) {
+	if storageWithContext, ok := h.storage.(interfaces.ContextStorage); ok {
+		return storageWithContext.GetFileInfoContext(ctx, path)
+	}
+	return h.storage.GetFileInfo(path)
+}
+
+func (h *FileHandler) getFileReader(ctx context.Context, path string) (io.ReadSeekCloser, error) {
+	if storageWithContext, ok := h.storage.(interfaces.ContextStorage); ok {
+		return storageWithContext.GetFileReaderContext(ctx, path)
+	}
+	return h.storage.GetFileReader(path)
+}
+
+func (h *FileHandler) setConditionalHeaders(w http.ResponseWriter, etag string, modTime time.Time, path string) {
+	w.Header().Set("ETag", `"`+etag+`"`)
+	w.Header().Set("Last-Modified", modTime.UTC().Format(http.TimeFormat))
+	h.setCacheControlHeader(w, path)
+}
+
 // setS3Headers sets S3 compatible headers on the response
 func (h *FileHandler) setS3Headers(w http.ResponseWriter, etag string, modTime time.Time, size int64, path string, contentType string) {
 	// S3 标准响应头
@@ -116,12 +145,7 @@ func (h *FileHandler) setS3Headers(w http.ResponseWriter, etag string, modTime t
 	w.Header().Set("x-amz-id-2", h.generateRequestID2())
 	w.Header().Set("Server", "S3-Static/1.0")
 
-	// 缓存相关头
-	w.Header().Set("ETag", `"`+etag+`"`)
-	w.Header().Set("Last-Modified", modTime.UTC().Format(http.TimeFormat))
-
-	// 根据配置的缓存策略设置 Cache-Control 头
-	h.setCacheControlHeader(w, path)
+	h.setConditionalHeaders(w, etag, modTime, path)
 
 	if contentType != "" {
 		w.Header().Set("Content-Type", contentType)
@@ -175,25 +199,24 @@ func (h *FileHandler) handleStorageError(w http.ResponseWriter, err error, path 
 	h.writeErrorResponse(w, http.StatusInternalServerError, "InternalError", err.Error())
 }
 
-// generateRequestID generates a unique request ID for x-amz-request-id
+// generateRequestID generates a fast unique request ID.
 func (h *FileHandler) generateRequestID() string {
-	b := make([]byte, 8)
-	rand.Read(b)
-	return fmt.Sprintf("%X", b)
+	id := requestIDCounter.Add(1)
+	return strings.ToUpper(strconv.FormatUint(id, 16))
 }
 
-// generateRequestID2 generates a unique request ID for x-amz-id-2
+// generateRequestID2 generates a secondary request ID derived from time and counter.
 func (h *FileHandler) generateRequestID2() string {
-	b := make([]byte, 16)
-	rand.Read(b)
-	return fmt.Sprintf("%X", b)
+	id := requestIDCounter.Add(1)
+	return fmt.Sprintf("%X%016X", time.Now().UnixNano(), id)
 }
 
 // writeErrorResponse writes an S3-compatible error response
 func (h *FileHandler) writeErrorResponse(w http.ResponseWriter, statusCode int, code, message string) {
-	// 设置 S3 标准错误响应头
+	requestID := h.generateRequestID()
+
 	w.Header().Set("Content-Type", "application/xml")
-	w.Header().Set("x-amz-request-id", h.generateRequestID())
+	w.Header().Set("x-amz-request-id", requestID)
 	w.Header().Set("x-amz-id-2", h.generateRequestID2())
 
 	w.WriteHeader(statusCode)
@@ -203,9 +226,9 @@ func (h *FileHandler) writeErrorResponse(w http.ResponseWriter, statusCode int, 
     <Code>%s</Code>
     <Message>%s</Message>
     <RequestId>%s</RequestId>
-</Error>`, code, message, h.generateRequestID())
+</Error>`, code, message, requestID)
 
-	w.Write([]byte(errorXML))
+	_, _ = w.Write([]byte(errorXML))
 }
 
 // HealthHandler handles health check requests

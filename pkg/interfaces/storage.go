@@ -1,6 +1,7 @@
 package interfaces
 
 import (
+	"context"
 	"io"
 	"time"
 )
@@ -28,4 +29,13 @@ type Storage interface {
 
 	// FileExists checks if a file exists at the given path
 	FileExists(path string) bool
+}
+
+// ContextStorage is an optional extension that allows storage backends
+// to honor request cancellation and deadlines.
+type ContextStorage interface {
+	GetFileInfoContext(ctx context.Context, path string) (*FileInfo, error)
+	ReadFileContext(ctx context.Context, path string) ([]byte, error)
+	GetFileReaderContext(ctx context.Context, path string) (io.ReadSeekCloser, error)
+	FileExistsContext(ctx context.Context, path string) bool
 }
