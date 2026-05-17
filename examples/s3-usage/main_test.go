@@ -25,6 +25,9 @@ func newExampleS3Client(ctx context.Context, endpoint string) (*awss3.Client, er
 	if err != nil {
 		return nil, err
 	}
+	if !strings.HasPrefix(endpoint, "http://") && !strings.HasPrefix(endpoint, "https://") {
+		endpoint = "http://" + endpoint
+	}
 	return awss3.NewFromConfig(cfg, func(o *awss3.Options) {
 		o.UsePathStyle = true
 		o.BaseEndpoint = aws.String(endpoint)

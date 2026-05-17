@@ -347,9 +347,14 @@ func TestS3Storage_ErrorHandling(t *testing.T) {
 			t.Error("Expected error for invalid credentials during initialization")
 		}
 
-		// The error should contain information about access key
-		if !strings.Contains(err.Error(), "Access Key") {
-			t.Errorf("Expected access key error, got: %v", err)
+		// Different MinIO/S3 SDK combinations surface auth failures with slightly
+		// different text. Keep the assertion on auth semantics, not exact phrasing.
+		authErr := strings.Contains(err.Error(), "Forbidden") ||
+			strings.Contains(err.Error(), "AccessDenied") ||
+			strings.Contains(err.Error(), "InvalidAccessKeyId") ||
+			strings.Contains(err.Error(), "SignatureDoesNotMatch")
+		if !authErr {
+			t.Errorf("Expected authentication/authorization error, got: %v", err)
 		}
 	})
 

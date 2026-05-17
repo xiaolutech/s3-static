@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -40,6 +41,10 @@ func NewFileHandler(storage interfaces.Storage, cfg *config.Config, logger *conf
 func (h *FileHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet, http.MethodHead:
+		if r.Method == http.MethodGet && shouldServeMetadata(r) {
+			h.handleGetMetadata(w, r)
+			return
+		}
 		h.handleGetObject(w, r)
 	default:
 		h.writeErrorResponse(w, http.StatusMethodNotAllowed, "MethodNotAllowed", "Method not allowed")
@@ -48,12 +53,12 @@ func (h *FileHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // handleGetObject handles GET requests for objects
 func (h *FileHandler) handleGetObject(w http.ResponseWriter, r *http.Request) {
-	path := strings.TrimPrefix(r.URL.Path, "/")
-	if path == "" {
-		h.writeErrorResponse(w, http.StatusBadRequest, "InvalidRequest", "Empty path")
-		return
-	}
-	if cleanedPath := strings.TrimPrefix(pathpkg.Clean("/"+path), "/"); cleanedPath != path {
+	path, ok := validateRequestPath(r.URL.Path)
+	if !ok {
+		if path == "" {
+			h.writeErrorResponse(w, http.StatusBadRequest, "InvalidRequest", "Empty path")
+			return
+		}
 		h.writeErrorResponse(w, http.StatusBadRequest, "InvalidRequest", "Invalid path")
 		return
 	}
@@ -91,6 +96,7 @@ func (h *FileHandler) handleGetObject(w http.ResponseWriter, r *http.Request) {
 	etag := fileInfo.ETag
 	h.setConditionalHeaders(w, etag, fileInfo.ModTime, path)
 
+	h.setMediaMetadataHeaders(w, path, fileInfo.ContentType, openedFile.Reader)
 	h.setS3Headers(w, etag, fileInfo.ModTime, fileInfo.Size, path, fileInfo.ContentType)
 	http.ServeContent(w, r, path, fileInfo.ModTime, openedFile.Reader)
 
@@ -99,6 +105,68 @@ func (h *FileHandler) handleGetObject(w http.ResponseWriter, r *http.Request) {
 		"size", fileInfo.Size,
 		"etag", etag,
 	)
+}
+
+func (h *FileHandler) handleGetMetadata(w http.ResponseWriter, r *http.Request) {
+	path, ok := validateRequestPath(r.URL.Path)
+	if !ok {
+		if path == "" {
+			writeJSONError(w, http.StatusBadRequest, "Empty path")
+			return
+		}
+		writeJSONError(w, http.StatusBadRequest, "Invalid path")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), storageRequestTimeout)
+	defer cancel()
+
+	fileInfo, err := h.getFileInfo(ctx, path)
+	if err != nil {
+		h.handleMetadataStorageError(w, err, path)
+		return
+	}
+
+	metadata := fileMetadataResponse{
+		Path:         path,
+		ContentType:  fileInfo.ContentType,
+		Size:         fileInfo.Size,
+		ETag:         fileInfo.ETag,
+		LastModified: fileInfo.ModTime.UTC(),
+	}
+
+	if shouldProbeMediaDimensions(path, fileInfo.ContentType) {
+		reader, err := h.getFileReader(ctx, path)
+		if err != nil {
+			h.handleMetadataStorageError(w, err, path)
+			return
+		}
+		defer reader.Close()
+
+		width, height, format, err := extractMediaMetadata(path, fileInfo.ContentType, reader)
+		if err != nil {
+			h.logger.Debug("Media metadata probe skipped",
+				"path", path,
+				"error", err,
+			)
+		} else {
+			metadata.Width = &width
+			metadata.Height = &height
+			if metadata.ContentType == "" {
+				metadata.ContentType = detectContentTypeFromFormat(format)
+			}
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "GET, HEAD")
+	w.Header().Set("Access-Control-Expose-Headers", "Content-Type")
+	w.WriteHeader(http.StatusOK)
+
+	if err := json.NewEncoder(w).Encode(metadata); err != nil {
+		h.logger.Error("Failed to write metadata response", "path", path, "error", err)
+	}
 }
 
 func (h *FileHandler) hasConditionalHeaders(r *http.Request) bool {
@@ -166,6 +234,35 @@ func (h *FileHandler) openFile(ctx context.Context, path string) (*interfaces.Op
 	}, nil
 }
 
+func (h *FileHandler) setMediaMetadataHeaders(w http.ResponseWriter, path, contentType string, reader io.ReadSeeker) {
+	if !shouldProbeMediaDimensions(path, contentType) {
+		return
+	}
+
+	width, height, _, err := extractMediaMetadata(path, contentType, reader)
+	if seekErr := seekReaderStart(reader); seekErr != nil {
+		h.logger.Debug("Media metadata probe could not rewind reader",
+			"path", path,
+			"error", seekErr,
+		)
+	}
+	if err != nil {
+		h.logger.Debug("Media metadata header probe skipped",
+			"path", path,
+			"error", err,
+		)
+		return
+	}
+
+	w.Header().Set(mediaWidthHeader, strconv.Itoa(width))
+	w.Header().Set(mediaHeightHeader, strconv.Itoa(height))
+}
+
+func seekReaderStart(reader io.Seeker) error {
+	_, err := reader.Seek(0, io.SeekStart)
+	return err
+}
+
 func (h *FileHandler) setConditionalHeaders(w http.ResponseWriter, etag string, modTime time.Time, path string) {
 	w.Header().Set("ETag", `"`+etag+`"`)
 	w.Header().Set("Last-Modified", modTime.UTC().Format(http.TimeFormat))
@@ -192,7 +289,7 @@ func (h *FileHandler) setS3Headers(w http.ResponseWriter, etag string, modTime t
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Access-Control-Allow-Methods", "GET, HEAD")
 	w.Header().Set("Access-Control-Allow-Headers", "Range")
-	w.Header().Set("Access-Control-Expose-Headers", "ETag, Last-Modified, Content-Length")
+	w.Header().Set("Access-Control-Expose-Headers", "ETag, Last-Modified, Content-Length, "+mediaWidthHeader+", "+mediaHeightHeader)
 }
 
 // setCacheControlHeader sets the appropriate Cache-Control header based on strategy
@@ -229,6 +326,17 @@ func (h *FileHandler) handleStorageError(w http.ResponseWriter, err error, path 
 
 	h.logger.Error("Storage error", "path", path, "error", err)
 	h.writeErrorResponse(w, http.StatusInternalServerError, "InternalError", err.Error())
+}
+
+func (h *FileHandler) handleMetadataStorageError(w http.ResponseWriter, err error, path string) {
+	if storage.IsNotFound(err) {
+		h.logger.Warn("Object not found", "path", path)
+		writeJSONError(w, http.StatusNotFound, "The specified key does not exist.")
+		return
+	}
+
+	h.logger.Error("Metadata storage error", "path", path, "error", err)
+	writeJSONError(w, http.StatusInternalServerError, err.Error())
 }
 
 // generateRequestID generates a fast unique request ID.
@@ -288,4 +396,25 @@ func (h *HealthHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte(`{"status":"healthy","timestamp":"` + time.Now().UTC().Format(time.RFC3339) + `"}`))
+}
+
+func shouldServeMetadata(r *http.Request) bool {
+	return r.URL.Query().Has("meta")
+}
+
+func validateRequestPath(requestPath string) (string, bool) {
+	path := strings.TrimPrefix(requestPath, "/")
+	if path == "" {
+		return "", false
+	}
+	if cleanedPath := strings.TrimPrefix(pathpkg.Clean("/"+path), "/"); cleanedPath != path {
+		return path, false
+	}
+	return path, true
+}
+
+func writeJSONError(w http.ResponseWriter, statusCode int, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(statusCode)
+	_ = json.NewEncoder(w).Encode(map[string]string{"error": message})
 }

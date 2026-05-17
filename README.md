@@ -125,6 +125,56 @@ Serves static files from the configured S3 bucket.
 - `Content-Length`: File size
 - `Content-Range`: Range information (for 206 Partial Content responses)
 
+### File Metadata
+```
+GET /{path}?meta=1
+```
+Returns object metadata as JSON. This is an extension endpoint for callers that need
+media dimensions in addition to standard object headers.
+
+Use `HEAD /{path}` when you only need standard HTTP metadata such as `Content-Type`,
+`Content-Length`, `ETag`, or `Last-Modified`. Use `GET /{path}?meta=1` when you also
+need parsed metadata such as image or video `width` and `height`.
+
+**Behavior:**
+- Reuses the same object path as file access; no separate metadata route is required
+- Returns base metadata for any object
+- Attempts to parse dimensions for supported image and video types
+- Currently supports PNG, JPEG, GIF, WebP, BMP, TIFF, SVG `width`/`height` or `viewBox`,
+  and MP4-family video containers such as MP4, M4V, and MOV
+
+**Example response:**
+```json
+{
+  "path": "images/logo.png",
+  "contentType": "image/png",
+  "size": 12345,
+  "etag": "abc123",
+  "lastModified": "2026-05-17T02:00:00Z",
+  "width": 512,
+  "height": 512
+}
+```
+
+**Response Fields:**
+- `path`: Object key path
+- `contentType`: Stored content type if available
+- `size`: Object size in bytes
+- `etag`: Object ETag
+- `lastModified`: Last modification time in RFC3339 format
+- `width`: Parsed media width, or `null` when unavailable
+- `height`: Parsed media height, or `null` when unavailable
+
+For regular `GET /{path}` and `HEAD /{path}` object responses, parsed dimensions are
+also exposed as S3-compatible user metadata headers when available:
+- `x-amz-meta-width`
+- `x-amz-meta-height`
+
+**Notes:**
+- `width` and `height` are best-effort parsed values, not S3-native metadata
+- Non-image files return metadata with `width` and `height` as `null`
+- If media metadata parsing fails, the endpoint still returns base object metadata
+
 ### Health Check
 ```
 GET /health

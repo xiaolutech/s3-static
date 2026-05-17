@@ -3,6 +3,14 @@ package handler
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
+	"encoding/binary"
+	"encoding/json"
+	"image"
+	"image/color"
+	"image/gif"
+	"image/jpeg"
+	"image/png"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -13,6 +21,9 @@ import (
 
 	"s3-static/internal/config"
 	"s3-static/pkg/interfaces"
+
+	"golang.org/x/image/bmp"
+	"golang.org/x/image/tiff"
 )
 
 // mockStorage implements interfaces.Storage for testing
@@ -64,6 +75,18 @@ func detectTestContentType(path string) string {
 		return "image/gif"
 	case "svg":
 		return "image/svg+xml"
+	case "webp":
+		return "image/webp"
+	case "bmp":
+		return "image/bmp"
+	case "tif", "tiff":
+		return "image/tiff"
+	case "mp4":
+		return "video/mp4"
+	case "mov":
+		return "video/quicktime"
+	case "m4v":
+		return "video/x-m4v"
 	case "pdf":
 		return "application/pdf"
 	// specific for the new test case, ensuring it doesn't conflict
@@ -633,6 +656,72 @@ func TestFileHandler_ServeHTTP_HEAD(t *testing.T) {
 	}
 }
 
+func TestFileHandler_ServeHTTP_HEADIncludesMediaMetadataHeaders(t *testing.T) {
+	cfg := config.DefaultConfig()
+	logger := config.NewLogger("info")
+	storage := newMockStorage()
+	handler := NewFileHandler(storage, cfg, logger)
+
+	var pngBuffer bytes.Buffer
+	img := image.NewRGBA(image.Rect(0, 0, 3, 2))
+	if err := png.Encode(&pngBuffer, img); err != nil {
+		t.Fatalf("encode png: %v", err)
+	}
+
+	modTime := time.Now().UTC().Truncate(time.Second)
+	storage.addFileWithContentType("image.png", pngBuffer.Bytes(), modTime, "image/png")
+
+	req := httptest.NewRequest(http.MethodHead, "/image.png", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("Expected status 200, got %d", w.Code)
+	}
+	if w.Body.Len() != 0 {
+		t.Fatalf("Expected empty body for HEAD, got %q", w.Body.String())
+	}
+	if got := w.Header().Get(mediaWidthHeader); got != "3" {
+		t.Fatalf("Expected %s 3, got %s", mediaWidthHeader, got)
+	}
+	if got := w.Header().Get(mediaHeightHeader); got != "2" {
+		t.Fatalf("Expected %s 2, got %s", mediaHeightHeader, got)
+	}
+}
+
+func TestFileHandler_ServeHTTP_GETIncludesMediaMetadataHeadersAndBody(t *testing.T) {
+	cfg := config.DefaultConfig()
+	logger := config.NewLogger("info")
+	storage := newMockStorage()
+	handler := NewFileHandler(storage, cfg, logger)
+
+	var pngBuffer bytes.Buffer
+	img := image.NewRGBA(image.Rect(0, 0, 3, 2))
+	if err := png.Encode(&pngBuffer, img); err != nil {
+		t.Fatalf("encode png: %v", err)
+	}
+
+	modTime := time.Now().UTC().Truncate(time.Second)
+	storage.addFileWithContentType("image.png", pngBuffer.Bytes(), modTime, "image/png")
+
+	req := httptest.NewRequest(http.MethodGet, "/image.png", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("Expected status 200, got %d", w.Code)
+	}
+	if got := w.Header().Get(mediaWidthHeader); got != "3" {
+		t.Fatalf("Expected %s 3, got %s", mediaWidthHeader, got)
+	}
+	if got := w.Header().Get(mediaHeightHeader); got != "2" {
+		t.Fatalf("Expected %s 2, got %s", mediaHeightHeader, got)
+	}
+	if !bytes.Equal(w.Body.Bytes(), pngBuffer.Bytes()) {
+		t.Fatal("Expected GET response body to remain the original image bytes")
+	}
+}
+
 func TestFileHandler_RangeRequest(t *testing.T) {
 	cfg := config.DefaultConfig()
 	logger := config.NewLogger("info")
@@ -755,4 +844,254 @@ func TestFileHandler_UsesOpenFileWhenAvailable(t *testing.T) {
 	if storage.readCalls != 0 {
 		t.Fatalf("Expected GetFileReader fallback not to be used, got %d", storage.readCalls)
 	}
+}
+
+func TestFileHandler_GetMetadataForRasterImages(t *testing.T) {
+	cfg := config.DefaultConfig()
+	logger := config.NewLogger("info")
+	img := image.NewRGBA(image.Rect(0, 0, 3, 2))
+	img.Set(0, 0, color.RGBA{R: 255, A: 255})
+
+	tests := []struct {
+		name        string
+		path        string
+		contentType string
+		encode      func(*bytes.Buffer) error
+		width       int
+		height      int
+	}{
+		{
+			name:        "png",
+			path:        "image.png",
+			contentType: "image/png",
+			encode:      func(buf *bytes.Buffer) error { return png.Encode(buf, img) },
+			width:       3,
+			height:      2,
+		},
+		{
+			name:        "jpeg",
+			path:        "image.jpg",
+			contentType: "image/jpeg",
+			encode:      func(buf *bytes.Buffer) error { return jpeg.Encode(buf, img, nil) },
+			width:       3,
+			height:      2,
+		},
+		{
+			name:        "gif",
+			path:        "image.gif",
+			contentType: "image/gif",
+			encode:      func(buf *bytes.Buffer) error { return gif.Encode(buf, img, nil) },
+			width:       3,
+			height:      2,
+		},
+		{
+			name:        "bmp",
+			path:        "image.bmp",
+			contentType: "image/bmp",
+			encode:      func(buf *bytes.Buffer) error { return bmp.Encode(buf, img) },
+			width:       3,
+			height:      2,
+		},
+		{
+			name:        "tiff",
+			path:        "image.tiff",
+			contentType: "image/tiff",
+			encode:      func(buf *bytes.Buffer) error { return tiff.Encode(buf, img, nil) },
+			width:       3,
+			height:      2,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			base := newMockStorage()
+			storage := &openFileMockStorage{mockStorage: base}
+			handler := NewFileHandler(storage, cfg, logger)
+
+			var encoded bytes.Buffer
+			if err := tt.encode(&encoded); err != nil {
+				t.Fatalf("encode %s: %v", tt.name, err)
+			}
+
+			modTime := time.Now().UTC().Truncate(time.Second)
+			base.addFileWithContentType(tt.path, encoded.Bytes(), modTime, tt.contentType)
+
+			req := httptest.NewRequest(http.MethodGet, "/"+tt.path+"?meta=1", nil)
+			w := httptest.NewRecorder()
+			handler.ServeHTTP(w, req)
+
+			if w.Code != http.StatusOK {
+				t.Fatalf("Expected status 200, got %d", w.Code)
+			}
+			if got := w.Header().Get("Content-Type"); got != "application/json" {
+				t.Fatalf("Expected json content type, got %s", got)
+			}
+
+			var response fileMetadataResponse
+			if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+				t.Fatalf("decode response: %v", err)
+			}
+			if response.Path != tt.path {
+				t.Fatalf("Expected path %s, got %s", tt.path, response.Path)
+			}
+			if response.Width == nil || *response.Width != tt.width {
+				t.Fatalf("Expected width %d, got %#v", tt.width, response.Width)
+			}
+			if response.Height == nil || *response.Height != tt.height {
+				t.Fatalf("Expected height %d, got %#v", tt.height, response.Height)
+			}
+			if response.ContentType != tt.contentType {
+				t.Fatalf("Expected %s content type, got %s", tt.contentType, response.ContentType)
+			}
+			if storage.readCalls != 1 {
+				t.Fatalf("Expected one reader call, got %d", storage.readCalls)
+			}
+		})
+	}
+}
+
+func TestFileHandler_GetMetadataForNonImageDoesNotReadBody(t *testing.T) {
+	cfg := config.DefaultConfig()
+	logger := config.NewLogger("info")
+	base := newMockStorage()
+	storage := &openFileMockStorage{mockStorage: base}
+	handler := NewFileHandler(storage, cfg, logger)
+
+	modTime := time.Now().UTC().Truncate(time.Second)
+	base.addFileWithContentType("notes.txt", []byte("hello"), modTime, "text/plain")
+
+	req := httptest.NewRequest(http.MethodGet, "/notes.txt?meta=1", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("Expected status 200, got %d", w.Code)
+	}
+
+	var response fileMetadataResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if response.Width != nil || response.Height != nil {
+		t.Fatalf("Expected nil dimensions, got width=%v height=%v", response.Width, response.Height)
+	}
+	if storage.readCalls != 0 {
+		t.Fatalf("Expected no reader calls, got %d", storage.readCalls)
+	}
+}
+
+func TestFileHandler_GetMetadataForSVG(t *testing.T) {
+	cfg := config.DefaultConfig()
+	logger := config.NewLogger("info")
+	storage := newMockStorage()
+	handler := NewFileHandler(storage, cfg, logger)
+
+	modTime := time.Now().UTC().Truncate(time.Second)
+	svg := []byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0, 0, 120, 80"></svg>`)
+	storage.addFileWithContentType("vector", svg, modTime, "image/svg+xml; charset=utf-8")
+
+	req := httptest.NewRequest(http.MethodGet, "/vector?meta=1", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("Expected status 200, got %d", w.Code)
+	}
+
+	var response fileMetadataResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if response.Width == nil || *response.Width != 120 {
+		t.Fatalf("Expected width 120, got %#v", response.Width)
+	}
+	if response.Height == nil || *response.Height != 80 {
+		t.Fatalf("Expected height 80, got %#v", response.Height)
+	}
+}
+
+func TestFileHandler_GetMetadataForWebP(t *testing.T) {
+	cfg := config.DefaultConfig()
+	logger := config.NewLogger("info")
+	storage := newMockStorage()
+	handler := NewFileHandler(storage, cfg, logger)
+
+	const webpBase64 = "UklGRrIBAABXRUJQVlA4TKUBAAAvSsAYAA8w//M///MfeJAkbXvaSG7m8Q3GfYSBJekwQztm/IcZlgwnmWImn2BK7aFmBtnVir6q//8VOkFE/xm4baTIu8c48ArEo6+B3zFKYln3pqClSCKX0begFTAXFOLXHSyF8cCNcZEG4OywuA4KVVfJCiArU7GAgJI8+lJP/OKMT/fBAjevg1cYB7YVkFuWga2lyPi5I0HFy5YTpWIHg0RZpkniRVW9odHAKOwosWuOGdxIyn2OvaCDvhg/we6TwadPBPbqBV58MsLmMJ8yZnOWk8SRz4N+QoyPL+MnamzMvcE1rHNEr91F9GKZPVUcS9w7PhhH36suB9qPeYb/oLk6cuTiJ0wOK3m5h1cKjW6EVZCYMK7dxcKCBdgP9HkKr9gkAO2P8GKZGWVdIAatQa+1IDpt6qyorVwdy01xdW8Jkfk6xjEXmVQQ+HQdFr6OKhIN34dXWq0+0qr6EJSCeeVLH9+gvGTLyqM65PQ44ihzlTXxQKjKbAvshXgir7Lil9w4L2bvMycmjQcqXaMCO6BlY28i+FOLzbfI1vEqxAhotocAAA=="
+
+	webpBytes, err := base64.StdEncoding.DecodeString(webpBase64)
+	if err != nil {
+		t.Fatalf("decode webp base64: %v", err)
+	}
+
+	modTime := time.Now().UTC().Truncate(time.Second)
+	storage.addFileWithContentType("sample.webp", webpBytes, modTime, "image/webp")
+
+	req := httptest.NewRequest(http.MethodGet, "/sample.webp?meta=1", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("Expected status 200, got %d", w.Code)
+	}
+
+	var response fileMetadataResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if response.Width == nil || *response.Width != 75 {
+		t.Fatalf("Expected width 75, got %#v", response.Width)
+	}
+	if response.Height == nil || *response.Height != 100 {
+		t.Fatalf("Expected height 100, got %#v", response.Height)
+	}
+	if response.ContentType != "image/webp" {
+		t.Fatalf("Expected image/webp content type, got %s", response.ContentType)
+	}
+}
+
+func TestFileHandler_GetMetadataForMP4Video(t *testing.T) {
+	cfg := config.DefaultConfig()
+	logger := config.NewLogger("info")
+	storage := newMockStorage()
+	handler := NewFileHandler(storage, cfg, logger)
+
+	modTime := time.Now().UTC().Truncate(time.Second)
+	storage.addFileWithContentType("clip.mp4", makeMP4WithTrackDimensions(1920, 1080), modTime, "video/mp4")
+
+	req := httptest.NewRequest(http.MethodGet, "/clip.mp4?meta=1", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("Expected status 200, got %d", w.Code)
+	}
+
+	var response fileMetadataResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if response.Width == nil || *response.Width != 1920 {
+		t.Fatalf("Expected width 1920, got %#v", response.Width)
+	}
+	if response.Height == nil || *response.Height != 1080 {
+		t.Fatalf("Expected height 1080, got %#v", response.Height)
+	}
+	if response.ContentType != "video/mp4" {
+		t.Fatalf("Expected video/mp4 content type, got %s", response.ContentType)
+	}
+}
+
+func makeMP4WithTrackDimensions(width, height int) []byte {
+	tkhdPayload := make([]byte, 84)
+	binary.BigEndian.PutUint32(tkhdPayload[76:80], uint32(width)<<16)
+	binary.BigEndian.PutUint32(tkhdPayload[80:84], uint32(height)<<16)
+	return mp4Box("moov", mp4Box("trak", mp4Box("tkhd", tkhdPayload)))
+}
+
+func mp4Box(boxType string, payload []byte) []byte {
+	box := make([]byte, 8+len(payload))
+	binary.BigEndian.PutUint32(box[0:4], uint32(len(box)))
+	copy(box[4:8], boxType)
+	copy(box[8:], payload)
+	return box
 }
