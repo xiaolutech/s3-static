@@ -172,6 +172,25 @@ func (m *mockStorage) addFileWithContentType(path string, content []byte, modTim
 	m.files[path].ContentType = contentType
 }
 
+func (m *mockStorage) addFileWithMetadata(path string, content []byte, modTime time.Time, etag, contentType string, metadata map[string]string) {
+	m.addFileWithContentType(path, content, modTime, contentType)
+	m.files[path].ETag = etag
+	if metadata != nil {
+		m.files[path].Metadata = make(map[string]string, len(metadata))
+		for key, value := range metadata {
+			m.files[path].Metadata[strings.ToLower(key)] = value
+		}
+	}
+}
+
+func optimizedTestConfig() *config.Config {
+	cfg := config.DefaultConfig()
+	cfg.OptimizedImageEnabled = true
+	cfg.OptimizedBucketName = "optimized"
+	cfg.OptimizedMinBytes = 0
+	return cfg
+}
+
 func TestFileHandler_UsesS3ETag(t *testing.T) {
 	cfg := config.DefaultConfig()
 	logger := config.NewLogger("info")
@@ -844,6 +863,387 @@ func TestFileHandler_UsesOpenFileWhenAvailable(t *testing.T) {
 	if storage.readCalls != 0 {
 		t.Fatalf("Expected GetFileReader fallback not to be used, got %d", storage.readCalls)
 	}
+}
+
+func TestFileHandler_OptimizedImageHit(t *testing.T) {
+	cfg := optimizedTestConfig()
+	logger := config.NewLogger("info")
+	source := newMockStorage()
+	optimizedBase := newMockStorage()
+	optimized := &openFileMockStorage{mockStorage: optimizedBase}
+	handler := NewFileHandlerWithOptimizedStorage(source, optimized, cfg, logger)
+
+	sourceTime := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	optimizedTime := sourceTime.Add(time.Minute)
+	source.addFileWithMetadata("photo.jpg", []byte("original image"), sourceTime, "source-etag", "image/jpeg", nil)
+	optimizedBase.addFileWithMetadata("photo.jpg", []byte("optimized image"), optimizedTime, "optimized-etag", "image/jpeg", map[string]string{
+		optimizedSourceETagMetadata: "source-etag",
+		optimizedProfileMetadata:    cfg.OptimizationProfile,
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/photo.jpg", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("Expected status 200, got %d", w.Code)
+	}
+	if w.Body.String() != "optimized image" {
+		t.Fatalf("Expected optimized body, got %q", w.Body.String())
+	}
+	if got := w.Header().Get(optimizedStatusHeader); got != "hit" {
+		t.Fatalf("Expected optimized hit header, got %q", got)
+	}
+	if got := w.Header().Get("ETag"); got != `"optimized-etag"` {
+		t.Fatalf("Expected optimized ETag, got %s", got)
+	}
+	if optimized.openCalls != 1 {
+		t.Fatalf("Expected optimized storage to be opened once, got %d", optimized.openCalls)
+	}
+}
+
+func TestFileHandler_OptimizedImageFallbackStatuses(t *testing.T) {
+	logger := config.NewLogger("info")
+	sourceTime := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+
+	tests := []struct {
+		name             string
+		optimizedETag    string
+		optimizedProfile string
+		expectedStatus   string
+	}{
+		{
+			name:           "missing optimized object",
+			expectedStatus: "miss",
+		},
+		{
+			name:             "stale source etag",
+			optimizedETag:    "old-source-etag",
+			optimizedProfile: "v1-jpeg82-png-best-w1920",
+			expectedStatus:   "stale",
+		},
+		{
+			name:             "profile mismatch",
+			optimizedETag:    "source-etag",
+			optimizedProfile: "v0-old-profile",
+			expectedStatus:   "profile-mismatch",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := optimizedTestConfig()
+			source := newMockStorage()
+			optimizedBase := newMockStorage()
+			optimized := &openFileMockStorage{mockStorage: optimizedBase}
+			handler := NewFileHandlerWithOptimizedStorage(source, optimized, cfg, logger)
+
+			source.addFileWithMetadata("photo.jpg", []byte("original image"), sourceTime, "source-etag", "image/jpeg", nil)
+			if tt.optimizedETag != "" {
+				optimizedBase.addFileWithMetadata("photo.jpg", []byte("optimized image"), sourceTime.Add(time.Minute), "optimized-etag", "image/jpeg", map[string]string{
+					optimizedSourceETagMetadata: tt.optimizedETag,
+					optimizedProfileMetadata:    tt.optimizedProfile,
+				})
+			}
+
+			req := httptest.NewRequest(http.MethodGet, "/photo.jpg", nil)
+			w := httptest.NewRecorder()
+			handler.ServeHTTP(w, req)
+
+			if w.Code != http.StatusOK {
+				t.Fatalf("Expected status 200, got %d", w.Code)
+			}
+			if w.Body.String() != "original image" {
+				t.Fatalf("Expected original body, got %q", w.Body.String())
+			}
+			if got := w.Header().Get(optimizedStatusHeader); got != tt.expectedStatus {
+				t.Fatalf("Expected optimized status %q, got %q", tt.expectedStatus, got)
+			}
+			if got := w.Header().Get("ETag"); got != `"source-etag"` {
+				t.Fatalf("Expected source ETag, got %s", got)
+			}
+			if optimized.openCalls != 1 {
+				t.Fatalf("Expected optimized storage to be opened once, got %d", optimized.openCalls)
+			}
+		})
+	}
+}
+
+func TestFileHandler_OptimizedImageSkipsRangeRequest(t *testing.T) {
+	cfg := optimizedTestConfig()
+	logger := config.NewLogger("info")
+	source := newMockStorage()
+	optimizedBase := newMockStorage()
+	optimized := &openFileMockStorage{mockStorage: optimizedBase}
+	handler := NewFileHandlerWithOptimizedStorage(source, optimized, cfg, logger)
+
+	modTime := time.Now().UTC().Truncate(time.Second)
+	source.addFileWithMetadata("photo.jpg", []byte("Hello, Range!"), modTime, "source-etag", "image/jpeg", nil)
+	optimizedBase.addFileWithMetadata("photo.jpg", []byte("optimized image"), modTime, "optimized-etag", "image/jpeg", map[string]string{
+		optimizedSourceETagMetadata: "source-etag",
+		optimizedProfileMetadata:    cfg.OptimizationProfile,
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/photo.jpg", nil)
+	req.Header.Set("Range", "bytes=0-4")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusPartialContent {
+		t.Fatalf("Expected status 206, got %d", w.Code)
+	}
+	if w.Body.String() != "Hello" {
+		t.Fatalf("Expected source range body, got %q", w.Body.String())
+	}
+	if got := w.Header().Get(optimizedStatusHeader); got != "" {
+		t.Fatalf("Expected no optimized status header, got %q", got)
+	}
+	if optimized.openCalls != 0 || optimized.infoCalls != 0 || optimized.readCalls != 0 {
+		t.Fatalf("Expected optimized storage not to be used, got open=%d info=%d read=%d", optimized.openCalls, optimized.infoCalls, optimized.readCalls)
+	}
+}
+
+func TestFileHandler_OptimizedImageSkipsHeadAndMetadata(t *testing.T) {
+	logger := config.NewLogger("info")
+	modTime := time.Now().UTC().Truncate(time.Second)
+
+	tests := []struct {
+		name   string
+		method string
+		url    string
+		assert func(t *testing.T, w *httptest.ResponseRecorder)
+	}{
+		{
+			name:   "head",
+			method: http.MethodHead,
+			url:    "/photo.jpg",
+			assert: func(t *testing.T, w *httptest.ResponseRecorder) {
+				t.Helper()
+				if w.Code != http.StatusOK {
+					t.Fatalf("Expected status 200, got %d", w.Code)
+				}
+				if w.Body.Len() != 0 {
+					t.Fatalf("Expected empty HEAD body, got %q", w.Body.String())
+				}
+				if got := w.Header().Get("ETag"); got != `"source-etag"` {
+					t.Fatalf("Expected source ETag, got %s", got)
+				}
+			},
+		},
+		{
+			name:   "metadata",
+			method: http.MethodGet,
+			url:    "/photo.jpg?meta=1",
+			assert: func(t *testing.T, w *httptest.ResponseRecorder) {
+				t.Helper()
+				if w.Code != http.StatusOK {
+					t.Fatalf("Expected status 200, got %d", w.Code)
+				}
+				var response fileMetadataResponse
+				if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+					t.Fatalf("decode response: %v", err)
+				}
+				if response.ETag != "source-etag" {
+					t.Fatalf("Expected source ETag in metadata, got %s", response.ETag)
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := optimizedTestConfig()
+			source := newMockStorage()
+			optimizedBase := newMockStorage()
+			optimized := &openFileMockStorage{mockStorage: optimizedBase}
+			handler := NewFileHandlerWithOptimizedStorage(source, optimized, cfg, logger)
+
+			source.addFileWithMetadata("photo.jpg", []byte("original image"), modTime, "source-etag", "image/jpeg", nil)
+			optimizedBase.addFileWithMetadata("photo.jpg", []byte("optimized image"), modTime, "optimized-etag", "image/jpeg", map[string]string{
+				optimizedSourceETagMetadata: "source-etag",
+				optimizedProfileMetadata:    cfg.OptimizationProfile,
+			})
+
+			req := httptest.NewRequest(tt.method, tt.url, nil)
+			w := httptest.NewRecorder()
+			handler.ServeHTTP(w, req)
+
+			tt.assert(t, w)
+			if got := w.Header().Get(optimizedStatusHeader); got != "" {
+				t.Fatalf("Expected no optimized status header, got %q", got)
+			}
+			if optimized.openCalls != 0 || optimized.infoCalls != 0 || optimized.readCalls != 0 {
+				t.Fatalf("Expected optimized storage not to be used, got open=%d info=%d read=%d", optimized.openCalls, optimized.infoCalls, optimized.readCalls)
+			}
+		})
+	}
+}
+
+func TestFileHandler_OptimizedImageSkipsNonImage(t *testing.T) {
+	cfg := optimizedTestConfig()
+	logger := config.NewLogger("info")
+	source := newMockStorage()
+	optimizedBase := newMockStorage()
+	optimized := &openFileMockStorage{mockStorage: optimizedBase}
+	handler := NewFileHandlerWithOptimizedStorage(source, optimized, cfg, logger)
+
+	modTime := time.Now().UTC().Truncate(time.Second)
+	source.addFileWithMetadata("document.pdf", []byte("original pdf"), modTime, "source-etag", "application/pdf", nil)
+	optimizedBase.addFileWithMetadata("document.pdf", []byte("optimized pdf"), modTime, "optimized-etag", "application/pdf", map[string]string{
+		optimizedSourceETagMetadata: "source-etag",
+		optimizedProfileMetadata:    cfg.OptimizationProfile,
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/document.pdf", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("Expected status 200, got %d", w.Code)
+	}
+	if w.Body.String() != "original pdf" {
+		t.Fatalf("Expected source body, got %q", w.Body.String())
+	}
+	if got := w.Header().Get(optimizedStatusHeader); got != "" {
+		t.Fatalf("Expected no optimized status header, got %q", got)
+	}
+	if optimized.openCalls != 0 || optimized.infoCalls != 0 || optimized.readCalls != 0 {
+		t.Fatalf("Expected optimized storage not to be used, got open=%d info=%d read=%d", optimized.openCalls, optimized.infoCalls, optimized.readCalls)
+	}
+}
+
+func TestFileHandler_OptimizedImageConditionalsUseSourceETag(t *testing.T) {
+	cfg := optimizedTestConfig()
+	logger := config.NewLogger("info")
+	modTime := time.Now().UTC().Truncate(time.Second)
+
+	t.Run("optimized etag does not drive not-modified response", func(t *testing.T) {
+		source := newMockStorage()
+		optimizedBase := newMockStorage()
+		optimized := &openFileMockStorage{mockStorage: optimizedBase}
+		handler := NewFileHandlerWithOptimizedStorage(source, optimized, cfg, logger)
+
+		source.addFileWithMetadata("photo.jpg", []byte("original image"), modTime, "source-etag", "image/jpeg", nil)
+		optimizedBase.addFileWithMetadata("photo.jpg", []byte("optimized image"), modTime, "optimized-etag", "image/jpeg", map[string]string{
+			optimizedSourceETagMetadata: "source-etag",
+			optimizedProfileMetadata:    cfg.OptimizationProfile,
+		})
+
+		req := httptest.NewRequest(http.MethodGet, "/photo.jpg", nil)
+		req.Header.Set("If-None-Match", `"optimized-etag"`)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("Expected status 200, got %d", w.Code)
+		}
+		if w.Body.String() != "optimized image" {
+			t.Fatalf("Expected optimized body, got %q", w.Body.String())
+		}
+		if got := w.Header().Get(optimizedStatusHeader); got != "hit" {
+			t.Fatalf("Expected optimized hit header, got %q", got)
+		}
+	})
+
+	t.Run("source etag drives not-modified response", func(t *testing.T) {
+		source := newMockStorage()
+		optimizedBase := newMockStorage()
+		optimized := &openFileMockStorage{mockStorage: optimizedBase}
+		handler := NewFileHandlerWithOptimizedStorage(source, optimized, cfg, logger)
+
+		source.addFileWithMetadata("photo.jpg", []byte("original image"), modTime, "source-etag", "image/jpeg", nil)
+		optimizedBase.addFileWithMetadata("photo.jpg", []byte("optimized image"), modTime, "optimized-etag", "image/jpeg", map[string]string{
+			optimizedSourceETagMetadata: "source-etag",
+			optimizedProfileMetadata:    cfg.OptimizationProfile,
+		})
+
+		req := httptest.NewRequest(http.MethodGet, "/photo.jpg", nil)
+		req.Header.Set("If-None-Match", `"source-etag"`)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+
+		if w.Code != http.StatusNotModified {
+			t.Fatalf("Expected status 304, got %d", w.Code)
+		}
+		if optimized.openCalls != 0 {
+			t.Fatalf("Expected optimized storage not to be opened after source 304, got %d", optimized.openCalls)
+		}
+	})
+
+	t.Run("if match source etag permits optimized response", func(t *testing.T) {
+		source := newMockStorage()
+		optimizedBase := newMockStorage()
+		optimized := &openFileMockStorage{mockStorage: optimizedBase}
+		handler := NewFileHandlerWithOptimizedStorage(source, optimized, cfg, logger)
+
+		source.addFileWithMetadata("photo.jpg", []byte("original image"), modTime, "source-etag", "image/jpeg", nil)
+		optimizedBase.addFileWithMetadata("photo.jpg", []byte("optimized image"), modTime, "optimized-etag", "image/jpeg", map[string]string{
+			optimizedSourceETagMetadata: "source-etag",
+			optimizedProfileMetadata:    cfg.OptimizationProfile,
+		})
+
+		req := httptest.NewRequest(http.MethodGet, "/photo.jpg", nil)
+		req.Header.Set("If-Match", `"source-etag"`)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("Expected status 200, got %d", w.Code)
+		}
+		if w.Body.String() != "optimized image" {
+			t.Fatalf("Expected optimized body, got %q", w.Body.String())
+		}
+	})
+
+	t.Run("if match optimized etag does not permit response", func(t *testing.T) {
+		source := newMockStorage()
+		optimizedBase := newMockStorage()
+		optimized := &openFileMockStorage{mockStorage: optimizedBase}
+		handler := NewFileHandlerWithOptimizedStorage(source, optimized, cfg, logger)
+
+		source.addFileWithMetadata("photo.jpg", []byte("original image"), modTime, "source-etag", "image/jpeg", nil)
+		optimizedBase.addFileWithMetadata("photo.jpg", []byte("optimized image"), modTime, "optimized-etag", "image/jpeg", map[string]string{
+			optimizedSourceETagMetadata: "source-etag",
+			optimizedProfileMetadata:    cfg.OptimizationProfile,
+		})
+
+		req := httptest.NewRequest(http.MethodGet, "/photo.jpg", nil)
+		req.Header.Set("If-Match", `"optimized-etag"`)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+
+		if w.Code != http.StatusPreconditionFailed {
+			t.Fatalf("Expected status 412, got %d", w.Code)
+		}
+		if optimized.openCalls != 0 {
+			t.Fatalf("Expected optimized storage not to be opened after source 412, got %d", optimized.openCalls)
+		}
+	})
+
+	t.Run("weak if none match source etag drives not-modified response", func(t *testing.T) {
+		source := newMockStorage()
+		optimizedBase := newMockStorage()
+		optimized := &openFileMockStorage{mockStorage: optimizedBase}
+		handler := NewFileHandlerWithOptimizedStorage(source, optimized, cfg, logger)
+
+		source.addFileWithMetadata("photo.jpg", []byte("original image"), modTime, "source-etag", "image/jpeg", nil)
+		optimizedBase.addFileWithMetadata("photo.jpg", []byte("optimized image"), modTime, "optimized-etag", "image/jpeg", map[string]string{
+			optimizedSourceETagMetadata: "source-etag",
+			optimizedProfileMetadata:    cfg.OptimizationProfile,
+		})
+
+		req := httptest.NewRequest(http.MethodGet, "/photo.jpg", nil)
+		req.Header.Set("If-None-Match", `"other", W/"source-etag"`)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+
+		if w.Code != http.StatusNotModified {
+			t.Fatalf("Expected status 304, got %d", w.Code)
+		}
+		if optimized.openCalls != 0 {
+			t.Fatalf("Expected optimized storage not to be opened after source 304, got %d", optimized.openCalls)
+		}
+	})
 }
 
 func TestFileHandler_GetMetadataForRasterImages(t *testing.T) {

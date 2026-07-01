@@ -17,23 +17,36 @@ import (
 	"s3-static/pkg/interfaces"
 )
 
-const storageRequestTimeout = 30 * time.Second
+const (
+	storageRequestTimeout = 30 * time.Second
+
+	optimizedSourceETagMetadata = "source-etag"
+	optimizedProfileMetadata    = "optimization-profile"
+	optimizedStatusHeader       = "X-S3-Static-Optimized"
+)
 
 var requestIDCounter atomic.Uint64
 
 // FileHandler handles HTTP requests for static files
 type FileHandler struct {
-	storage interfaces.Storage
-	config  *config.Config
-	logger  *config.Logger
+	storage          interfaces.Storage
+	optimizedStorage interfaces.Storage
+	config           *config.Config
+	logger           *config.Logger
 }
 
 // NewFileHandler creates a new FileHandler instance
 func NewFileHandler(storage interfaces.Storage, cfg *config.Config, logger *config.Logger) *FileHandler {
+	return NewFileHandlerWithOptimizedStorage(storage, nil, cfg, logger)
+}
+
+// NewFileHandlerWithOptimizedStorage creates a new FileHandler instance with an optional optimized image storage backend.
+func NewFileHandlerWithOptimizedStorage(storage interfaces.Storage, optimized interfaces.Storage, cfg *config.Config, logger *config.Logger) *FileHandler {
 	return &FileHandler{
-		storage: storage,
-		config:  cfg,
-		logger:  logger,
+		storage:          storage,
+		optimizedStorage: optimized,
+		config:           cfg,
+		logger:           logger,
 	}
 }
 
@@ -66,17 +79,42 @@ func (h *FileHandler) handleGetObject(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), storageRequestTimeout)
 	defer cancel()
 
-	if h.hasConditionalHeaders(r) {
-		fileInfo, err := h.getFileInfo(ctx, path)
+	var sourceInfo *interfaces.FileInfo
+	if h.hasConditionalHeaders(r) || h.canConsiderOptimized(r) {
+		var err error
+		sourceInfo, err = h.getFileInfo(ctx, path)
 		if err != nil {
 			h.handleStorageError(w, err, path)
 			return
 		}
+	}
 
-		etag := fileInfo.ETag
-		h.setConditionalHeaders(w, etag, fileInfo.ModTime, path)
-		if h.checkConditionalRequest(r, etag, fileInfo.ModTime) {
-			w.WriteHeader(http.StatusNotModified)
+	if h.hasConditionalHeaders(r) {
+		etag := sourceInfo.ETag
+		h.setConditionalHeaders(w, etag, sourceInfo.ModTime, path)
+		if status, handled := h.sourceConditionalStatus(r, path, sourceInfo); handled {
+			w.WriteHeader(status)
+			return
+		}
+	}
+
+	if sourceInfo != nil && h.shouldTryOptimized(r, sourceInfo) {
+		optimizedFile, status := h.openTrustedOptimized(ctx, sourceInfo)
+		w.Header().Set(optimizedStatusHeader, status)
+		if optimizedFile != nil {
+			defer func() {
+				if optimizedFile.Reader != nil {
+					optimizedFile.Reader.Close()
+				}
+			}()
+
+			h.serveOpenedFile(w, r, path, optimizedFile)
+			h.logger.Debug("File served",
+				"path", path,
+				"size", optimizedFile.Info.Size,
+				"etag", optimizedFile.Info.ETag,
+				"optimized", true,
+			)
 			return
 		}
 	}
@@ -92,18 +130,12 @@ func (h *FileHandler) handleGetObject(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
-	fileInfo := openedFile.Info
-	etag := fileInfo.ETag
-	h.setConditionalHeaders(w, etag, fileInfo.ModTime, path)
-
-	h.setMediaMetadataHeaders(w, path, fileInfo.ContentType, openedFile.Reader)
-	h.setS3Headers(w, etag, fileInfo.ModTime, fileInfo.Size, path, fileInfo.ContentType)
-	http.ServeContent(w, r, path, fileInfo.ModTime, openedFile.Reader)
+	h.serveOpenedFile(w, r, path, openedFile)
 
 	h.logger.Debug("File served",
 		"path", path,
-		"size", fileInfo.Size,
-		"etag", etag,
+		"size", openedFile.Info.Size,
+		"etag", openedFile.Info.ETag,
 	)
 }
 
@@ -170,60 +202,55 @@ func (h *FileHandler) handleGetMetadata(w http.ResponseWriter, r *http.Request) 
 }
 
 func (h *FileHandler) hasConditionalHeaders(r *http.Request) bool {
-	return r.Header.Get("If-None-Match") != "" || r.Header.Get("If-Modified-Since") != ""
+	return r.Header.Get("If-Match") != "" ||
+		r.Header.Get("If-None-Match") != "" ||
+		r.Header.Get("If-Unmodified-Since") != "" ||
+		r.Header.Get("If-Modified-Since") != ""
 }
 
 // checkConditionalRequest checks if the request should return 304 Not Modified
 func (h *FileHandler) checkConditionalRequest(r *http.Request, etag string, modTime time.Time) bool {
-	// Check If-None-Match header
-	if inm := r.Header.Get("If-None-Match"); inm != "" {
-		// Handle both quoted and unquoted ETags
-		if inm == etag || inm == `"`+etag+`"` || inm == "*" {
-			return true
-		}
-	}
-
-	// Check If-Modified-Since header
-	if ims := r.Header.Get("If-Modified-Since"); ims != "" {
-		if t, err := http.ParseTime(ims); err == nil {
-			// If file modification time is not after the If-Modified-Since time,
-			// then the file hasn't been modified since that time
-			fileModTime := modTime.Truncate(time.Second)
-			imsTime := t.Truncate(time.Second)
-			if !fileModTime.After(imsTime) {
-				return true
-			}
-		}
-	}
-
-	return false
+	status, handled := h.sourceConditionalStatus(r, "", &interfaces.FileInfo{ETag: etag, ModTime: modTime})
+	return handled && status == http.StatusNotModified
 }
 
 func (h *FileHandler) getFileInfo(ctx context.Context, path string) (*interfaces.FileInfo, error) {
-	if storageWithContext, ok := h.storage.(interfaces.ContextStorage); ok {
+	return h.getFileInfoFromStorage(ctx, h.storage, path)
+}
+
+func (h *FileHandler) getFileInfoFromStorage(ctx context.Context, backend interfaces.Storage, path string) (*interfaces.FileInfo, error) {
+	if storageWithContext, ok := backend.(interfaces.ContextStorage); ok {
 		return storageWithContext.GetFileInfoContext(ctx, path)
 	}
-	return h.storage.GetFileInfo(path)
+	return backend.GetFileInfo(path)
 }
 
 func (h *FileHandler) getFileReader(ctx context.Context, path string) (io.ReadSeekCloser, error) {
-	if storageWithContext, ok := h.storage.(interfaces.ContextStorage); ok {
+	return h.getFileReaderFromStorage(ctx, h.storage, path)
+}
+
+func (h *FileHandler) getFileReaderFromStorage(ctx context.Context, backend interfaces.Storage, path string) (io.ReadSeekCloser, error) {
+	if storageWithContext, ok := backend.(interfaces.ContextStorage); ok {
 		return storageWithContext.GetFileReaderContext(ctx, path)
 	}
-	return h.storage.GetFileReader(path)
+	return backend.GetFileReader(path)
 }
 
 func (h *FileHandler) openFile(ctx context.Context, path string) (*interfaces.OpenedFile, error) {
-	if opener, ok := h.storage.(interfaces.FileOpener); ok {
+	return h.openFileFromStorage(ctx, h.storage, path)
+}
+
+func (h *FileHandler) openFileFromStorage(ctx context.Context, backend interfaces.Storage, path string) (*interfaces.OpenedFile, error) {
+	if opener, ok := backend.(interfaces.FileOpener); ok {
 		return opener.OpenFileContext(ctx, path)
 	}
 
-	fileInfo, err := h.getFileInfo(ctx, path)
+	fileInfo, err := h.getFileInfoFromStorage(ctx, backend, path)
 	if err != nil {
 		return nil, err
 	}
 
-	reader, err := h.getFileReader(ctx, path)
+	reader, err := h.getFileReaderFromStorage(ctx, backend, path)
 	if err != nil {
 		return nil, err
 	}
@@ -232,6 +259,141 @@ func (h *FileHandler) openFile(ctx context.Context, path string) (*interfaces.Op
 		Info:   fileInfo,
 		Reader: reader,
 	}, nil
+}
+
+func (h *FileHandler) canConsiderOptimized(r *http.Request) bool {
+	return h.config.OptimizedImageEnabled &&
+		h.optimizedStorage != nil &&
+		r.Method == http.MethodGet &&
+		!shouldServeMetadata(r) &&
+		r.Header.Get("Range") == ""
+}
+
+func (h *FileHandler) shouldTryOptimized(r *http.Request, source *interfaces.FileInfo) bool {
+	if !h.canConsiderOptimized(r) {
+		return false
+	}
+	if source == nil || source.Size < h.config.OptimizedMinBytes {
+		return false
+	}
+
+	switch contentMediaType(source.ContentType) {
+	case "image/jpeg", "image/png":
+		return true
+	}
+
+	switch strings.ToLower(fileExtension(source.Path)) {
+	case ".jpg", ".jpeg", ".png":
+		return true
+	default:
+		return false
+	}
+}
+
+func (h *FileHandler) openTrustedOptimized(ctx context.Context, source *interfaces.FileInfo) (*interfaces.OpenedFile, string) {
+	optimized, err := h.openFileFromStorage(ctx, h.optimizedStorage, source.Path)
+	if err != nil {
+		return nil, "miss"
+	}
+
+	if optimized.Info.Metadata[optimizedSourceETagMetadata] != source.ETag {
+		_ = optimized.Reader.Close()
+		return nil, "stale"
+	}
+	if optimized.Info.Metadata[optimizedProfileMetadata] != h.config.OptimizationProfile {
+		_ = optimized.Reader.Close()
+		return nil, "profile-mismatch"
+	}
+	return optimized, "hit"
+}
+
+func (h *FileHandler) serveOpenedFile(w http.ResponseWriter, r *http.Request, path string, openedFile *interfaces.OpenedFile) {
+	fileInfo := openedFile.Info
+	etag := fileInfo.ETag
+	h.setConditionalHeaders(w, etag, fileInfo.ModTime, path)
+
+	h.setMediaMetadataHeaders(w, path, fileInfo.ContentType, openedFile.Reader)
+	h.setS3Headers(w, etag, fileInfo.ModTime, fileInfo.Size, path, fileInfo.ContentType)
+	http.ServeContent(w, requestWithoutHandledConditionals(r), path, fileInfo.ModTime, openedFile.Reader)
+}
+
+func (h *FileHandler) sourceConditionalStatus(r *http.Request, path string, source *interfaces.FileInfo) (int, bool) {
+	if !h.hasConditionalHeaders(r) {
+		return 0, false
+	}
+
+	probe := &conditionalProbeResponseWriter{header: make(http.Header)}
+	h.setConditionalHeaders(probe, source.ETag, source.ModTime, path)
+	http.ServeContent(probe, requestForSourceConditionalProbe(r, source.ETag), path, source.ModTime, strings.NewReader(""))
+
+	switch probe.statusCode {
+	case http.StatusNotModified, http.StatusPreconditionFailed:
+		return probe.statusCode, true
+	default:
+		return 0, false
+	}
+}
+
+func requestWithoutHandledConditionals(r *http.Request) *http.Request {
+	if !hasHandledConditionalHeaders(r) {
+		return r
+	}
+
+	withoutConditionals := new(http.Request)
+	*withoutConditionals = *r
+	withoutConditionals.Header = r.Header.Clone()
+	withoutConditionals.Header.Del("If-Match")
+	withoutConditionals.Header.Del("If-None-Match")
+	withoutConditionals.Header.Del("If-Unmodified-Since")
+	withoutConditionals.Header.Del("If-Modified-Since")
+	return withoutConditionals
+}
+
+func hasHandledConditionalHeaders(r *http.Request) bool {
+	return r.Header.Get("If-Match") != "" ||
+		r.Header.Get("If-None-Match") != "" ||
+		r.Header.Get("If-Unmodified-Since") != "" ||
+		r.Header.Get("If-Modified-Since") != ""
+}
+
+func requestForSourceConditionalProbe(r *http.Request, sourceETag string) *http.Request {
+	bareIfNoneMatch := strings.TrimSpace(r.Header.Get("If-None-Match")) == sourceETag
+	hasRangeHeaders := r.Header.Get("Range") != "" || r.Header.Get("If-Range") != ""
+	if !bareIfNoneMatch && !hasRangeHeaders {
+		return r
+	}
+
+	probeRequest := new(http.Request)
+	*probeRequest = *r
+	probeRequest.Header = r.Header.Clone()
+	if bareIfNoneMatch {
+		probeRequest.Header.Set("If-None-Match", `"`+sourceETag+`"`)
+	}
+	probeRequest.Header.Del("Range")
+	probeRequest.Header.Del("If-Range")
+	return probeRequest
+}
+
+type conditionalProbeResponseWriter struct {
+	header     http.Header
+	statusCode int
+}
+
+func (w *conditionalProbeResponseWriter) Header() http.Header {
+	return w.header
+}
+
+func (w *conditionalProbeResponseWriter) WriteHeader(statusCode int) {
+	if w.statusCode == 0 {
+		w.statusCode = statusCode
+	}
+}
+
+func (w *conditionalProbeResponseWriter) Write(p []byte) (int, error) {
+	if w.statusCode == 0 {
+		w.statusCode = http.StatusOK
+	}
+	return len(p), nil
 }
 
 func (h *FileHandler) setMediaMetadataHeaders(w http.ResponseWriter, path, contentType string, reader io.ReadSeeker) {

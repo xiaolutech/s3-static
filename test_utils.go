@@ -220,20 +220,19 @@ func SetupTestSuiteWithEnv(t *testing.T, envVars map[string]string) *TestSuite {
 	}
 
 	// Create configuration with custom environment variables
-	cfg := &config.Config{
-		Port:                 "8080",
-		Host:                 "localhost",
-		BasePath:             "./data", // Required field
-		S3Endpoint:           endpoint,
-		S3AccessKeyID:        "minioadmin",
-		S3SecretAccessKey:    "minioadmin",
-		S3Region:             "us-east-1",
-		BucketName:           bucketName,
-		S3UseSSL:             false,
-		DefaultCacheDuration: time.Hour,
-		CacheStrategy:        "no-cache", // Default
-		LogLevel:             "info",
-	}
+	cfg := config.DefaultConfig()
+	cfg.Port = "8080"
+	cfg.Host = "localhost"
+	cfg.BasePath = "./data"
+	cfg.S3Endpoint = endpoint
+	cfg.S3AccessKeyID = "minioadmin"
+	cfg.S3SecretAccessKey = "minioadmin"
+	cfg.S3Region = "us-east-1"
+	cfg.BucketName = bucketName
+	cfg.S3UseSSL = false
+	cfg.DefaultCacheDuration = time.Hour
+	cfg.CacheStrategy = "no-cache"
+	cfg.LogLevel = "info"
 
 	// Apply custom environment variables to config
 	if cacheStrategy, exists := envVars["CACHE_STRATEGY"]; exists {

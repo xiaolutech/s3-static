@@ -8,6 +8,15 @@
 
 **Tech Stack:** Go 1.25, AWS SDK for Go v2, existing `net/http` handler, MinIO/S3-compatible object metadata, existing unit/integration test patterns.
 
+## Implementation Status
+
+- [x] Task 1: Add optimized serving config.
+- [x] Task 2: Surface S3 user metadata.
+- [x] Task 3: Add alternate bucket storage factory.
+- [x] Task 4: Serve trusted optimized copies from handler.
+- [ ] Task 5: Wire optimized storage in `cmd/s3-static/main.go`.
+- [ ] Task 6: Document external optimizer contract in `README.md`.
+
 ---
 
 ## Scope And Non-Goals

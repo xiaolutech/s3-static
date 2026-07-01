@@ -14,17 +14,7 @@ func NewStorage(cfg *config.Config) (interfaces.Storage, error) {
 	}
 
 	if cfg.IsS3Enabled() {
-		// Create S3 storage
-		s3Config := S3Config{
-			Endpoint:        cfg.S3Endpoint,
-			AccessKeyID:     cfg.S3AccessKeyID,
-			SecretAccessKey: cfg.S3SecretAccessKey,
-			UseSSL:          cfg.S3UseSSL,
-			Region:          cfg.S3Region,
-			Bucket:          cfg.BucketName,
-		}
-
-		storage, err := NewS3Storage(s3Config)
+		storage, err := NewS3Storage(s3ConfigForBucket(cfg, cfg.BucketName))
 		if err != nil {
 			return nil, fmt.Errorf("failed to create S3 storage: %w", err)
 		}
@@ -44,7 +34,15 @@ func NewS3StorageForBucket(cfg *config.Config, bucket string) (*S3Storage, error
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid configuration: %w", err)
 	}
-	s3Config := S3Config{
+	storage, err := NewS3Storage(s3ConfigForBucket(cfg, bucket))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create S3 storage for bucket %q: %w", bucket, err)
+	}
+	return storage, nil
+}
+
+func s3ConfigForBucket(cfg *config.Config, bucket string) S3Config {
+	return S3Config{
 		Endpoint:        cfg.S3Endpoint,
 		AccessKeyID:     cfg.S3AccessKeyID,
 		SecretAccessKey: cfg.S3SecretAccessKey,
@@ -52,5 +50,4 @@ func NewS3StorageForBucket(cfg *config.Config, bucket string) (*S3Storage, error
 		Region:          cfg.S3Region,
 		Bucket:          bucket,
 	}
-	return NewS3Storage(s3Config)
 }
