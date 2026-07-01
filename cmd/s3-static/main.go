@@ -13,6 +13,7 @@ import (
 	"s3-static/internal/config"
 	"s3-static/internal/handler"
 	"s3-static/internal/storage"
+	"s3-static/pkg/interfaces"
 )
 
 func main() {
@@ -35,8 +36,20 @@ func main() {
 		})
 	}
 
+	var optimizedStorage interfaces.Storage
+	if cfg.OptimizedImageEnabled {
+		optimizedStorage, err = storage.NewS3StorageForBucket(cfg, cfg.OptimizedBucketName)
+		if err != nil {
+			logger.Error("Optimized image storage disabled", map[string]interface{}{
+				"bucket": cfg.OptimizedBucketName,
+				"error":  err.Error(),
+			})
+			optimizedStorage = nil
+		}
+	}
+
 	// Initialize HTTP handlers
-	fileHandler := handler.NewFileHandler(storageInstance, cfg, logger)
+	fileHandler := handler.NewFileHandlerWithOptimizedStorage(storageInstance, optimizedStorage, cfg, logger)
 	healthHandler := handler.NewHealthHandler(storageInstance, logger)
 
 	// Setup HTTP server

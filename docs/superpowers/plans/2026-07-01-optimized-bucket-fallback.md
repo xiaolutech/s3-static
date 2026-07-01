@@ -14,7 +14,7 @@
 - [x] Task 2: Surface S3 user metadata.
 - [x] Task 3: Add alternate bucket storage factory.
 - [x] Task 4: Serve trusted optimized copies from handler.
-- [ ] Task 5: Wire optimized storage in `cmd/s3-static/main.go`.
+- [x] Task 5: Wire optimized storage in `cmd/s3-static/main.go`.
 - [ ] Task 6: Document external optimizer contract in `README.md`.
 
 ---
