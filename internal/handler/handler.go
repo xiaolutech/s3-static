@@ -326,13 +326,11 @@ func (h *FileHandler) triggerOptimization(source *interfaces.FileInfo, status st
 	}
 
 	key := strings.TrimPrefix(source.Path, "/")
-	go func() {
-		if err := h.optimizerTrigger.Trigger(context.Background(), key); err != nil {
-			h.logger.Warn("Optimizer trigger failed", "path", source.Path, "status", status, "error", err)
-		} else {
-			h.logger.Debug("Optimizer trigger queued", "path", source.Path, "status", status)
-		}
-	}()
+	if err := h.optimizerTrigger.Trigger(context.Background(), key); err != nil {
+		h.logger.Warn("Optimizer trigger failed", "path", source.Path, "status", status, "error", err)
+	} else {
+		h.logger.Debug("Optimizer trigger queued", "path", source.Path, "status", status)
+	}
 }
 
 func (h *FileHandler) serveOpenedFile(w http.ResponseWriter, r *http.Request, path string, openedFile *interfaces.OpenedFile) {

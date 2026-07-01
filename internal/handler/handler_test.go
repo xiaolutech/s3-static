@@ -1224,6 +1224,38 @@ func TestFileHandler_OptimizedImageSkipsNonImage(t *testing.T) {
 	assertNoOptimizerTrigger(t, trigger)
 }
 
+func TestFileHandler_OptimizedImageSkipsBelowThreshold(t *testing.T) {
+	cfg := optimizedTestConfig()
+	cfg.OptimizedMinBytes = 1024
+	logger := config.NewLogger("info")
+	source := newMockStorage()
+	optimizedBase := newMockStorage()
+	optimized := &openFileMockStorage{mockStorage: optimizedBase}
+	trigger := newRecordingOptimizerTrigger(nil)
+	handler := NewFileHandlerWithOptimizedStorageAndTrigger(source, optimized, trigger, cfg, logger)
+
+	modTime := time.Now().UTC().Truncate(time.Second)
+	source.addFileWithMetadata("small.jpg", []byte("small"), modTime, "source-etag", "image/jpeg", nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/small.jpg", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("Expected status 200, got %d", w.Code)
+	}
+	if w.Body.String() != "small" {
+		t.Fatalf("Expected source body, got %q", w.Body.String())
+	}
+	if got := w.Header().Get(optimizedStatusHeader); got != "" {
+		t.Fatalf("Expected no optimized status header, got %q", got)
+	}
+	if optimized.openCalls != 0 || optimized.infoCalls != 0 || optimized.readCalls != 0 {
+		t.Fatalf("Expected optimized storage not to be used, got open=%d info=%d read=%d", optimized.openCalls, optimized.infoCalls, optimized.readCalls)
+	}
+	assertNoOptimizerTrigger(t, trigger)
+}
+
 func TestFileHandler_OptimizedImageConditionalsUseSourceETag(t *testing.T) {
 	cfg := optimizedTestConfig()
 	logger := config.NewLogger("info")
