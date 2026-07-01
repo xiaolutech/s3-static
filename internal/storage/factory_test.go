@@ -8,20 +8,13 @@ import (
 )
 
 func TestNewStorage_S3Enabled(t *testing.T) {
-	cfg := &config.Config{
-		Port:                 "8080",
-		Host:                 "localhost",
-		BasePath:             "/tmp",
-		S3Endpoint:           "localhost:9000",
-		S3AccessKeyID:        "testkey",
-		S3SecretAccessKey:    "testsecret",
-		S3Region:             "us-east-1",
-		BucketName:           "test-bucket",
-		S3UseSSL:             false,
-		LogLevel:             "info",
-		DefaultCacheDuration: time.Hour,
-		CacheStrategy:        "no-cache",
-	}
+	cfg := newStorageFactoryConfig(func(c *config.Config) {
+		c.S3Endpoint = "localhost:9000"
+		c.S3AccessKeyID = "testkey"
+		c.S3SecretAccessKey = "testsecret"
+		c.S3Region = "us-east-1"
+		c.S3UseSSL = false
+	})
 
 	// This will fail because we don't have a real S3 server running
 	// but we can test that the factory method is called correctly
@@ -37,16 +30,10 @@ func TestNewStorage_S3Enabled(t *testing.T) {
 }
 
 func TestNewStorage_S3Disabled(t *testing.T) {
-	cfg := &config.Config{
-		Port:                 "8080",
-		Host:                 "localhost",
-		S3Endpoint:           "", // S3 disabled
-		BasePath:             "/tmp/test",
-		BucketName:           "test-bucket",
-		LogLevel:             "info",
-		DefaultCacheDuration: time.Hour,
-		CacheStrategy:        "no-cache",
-	}
+	cfg := newStorageFactoryConfig(func(c *config.Config) {
+		c.S3Endpoint = "" // S3 disabled
+		c.BasePath = "/tmp/test"
+	})
 
 	_, err := NewStorage(cfg)
 	if err == nil {
@@ -66,48 +53,30 @@ func TestNewStorage_InvalidS3Config(t *testing.T) {
 	}{
 		{
 			name: "missing access key",
-			config: &config.Config{
-				Port:                 "8080",
-				Host:                 "localhost",
-				BasePath:             "/tmp",
-				S3Endpoint:           "localhost:9000",
-				S3SecretAccessKey:    "testsecret",
-				S3Region:             "us-east-1",
-				BucketName:           "test-bucket",
-				LogLevel:             "info",
-				DefaultCacheDuration: time.Hour,
-				CacheStrategy:        "no-cache",
-			},
+			config: newStorageFactoryConfig(func(c *config.Config) {
+				c.S3Endpoint = "localhost:9000"
+				c.S3AccessKeyID = ""
+				c.S3SecretAccessKey = "testsecret"
+				c.S3Region = "us-east-1"
+			}),
 		},
 		{
 			name: "missing secret key",
-			config: &config.Config{
-				Port:                 "8080",
-				Host:                 "localhost",
-				BasePath:             "/tmp",
-				S3Endpoint:           "localhost:9000",
-				S3AccessKeyID:        "testkey",
-				S3Region:             "us-east-1",
-				BucketName:           "test-bucket",
-				LogLevel:             "info",
-				DefaultCacheDuration: time.Hour,
-				CacheStrategy:        "no-cache",
-			},
+			config: newStorageFactoryConfig(func(c *config.Config) {
+				c.S3Endpoint = "localhost:9000"
+				c.S3AccessKeyID = "testkey"
+				c.S3SecretAccessKey = ""
+				c.S3Region = "us-east-1"
+			}),
 		},
 		{
 			name: "missing region",
-			config: &config.Config{
-				Port:                 "8080",
-				Host:                 "localhost",
-				BasePath:             "/tmp",
-				S3Endpoint:           "localhost:9000",
-				S3AccessKeyID:        "testkey",
-				S3SecretAccessKey:    "testsecret",
-				BucketName:           "test-bucket",
-				LogLevel:             "info",
-				DefaultCacheDuration: time.Hour,
-				CacheStrategy:        "no-cache",
-			},
+			config: newStorageFactoryConfig(func(c *config.Config) {
+				c.S3Endpoint = "localhost:9000"
+				c.S3AccessKeyID = "testkey"
+				c.S3SecretAccessKey = "testsecret"
+				c.S3Region = ""
+			}),
 		},
 	}
 
@@ -135,56 +104,37 @@ func TestNewStorage_ConfigValidation(t *testing.T) {
 	}{
 		{
 			name: "valid S3 config",
-			config: &config.Config{
-				Port:                 "8080",
-				Host:                 "localhost",
-				BasePath:             "/tmp",
-				BucketName:           "test-bucket",
-				S3Endpoint:           "localhost:9000",
-				S3AccessKeyID:        "testkey",
-				S3SecretAccessKey:    "testsecret",
-				S3Region:             "us-east-1",
-				S3UseSSL:             false,
-				LogLevel:             "info",
-				DefaultCacheDuration: time.Hour,
-				CacheStrategy:        "no-cache",
-			},
+			config: newStorageFactoryConfig(func(c *config.Config) {
+				c.S3Endpoint = "localhost:9000"
+				c.S3AccessKeyID = "testkey"
+				c.S3SecretAccessKey = "testsecret"
+				c.S3Region = "us-east-1"
+				c.S3UseSSL = false
+			}),
 			expectError:    true, // Will fail on connection, but config is valid
 			expectedErrMsg: "failed to create S3 storage",
 		},
 		{
 			name: "invalid port",
-			config: &config.Config{
-				Port:                 "invalid",
-				Host:                 "localhost",
-				BasePath:             "/tmp",
-				BucketName:           "test-bucket",
-				S3Endpoint:           "localhost:9000",
-				S3AccessKeyID:        "testkey",
-				S3SecretAccessKey:    "testsecret",
-				S3Region:             "us-east-1",
-				LogLevel:             "info",
-				DefaultCacheDuration: time.Hour,
-				CacheStrategy:        "no-cache",
-			},
+			config: newStorageFactoryConfig(func(c *config.Config) {
+				c.Port = "invalid"
+				c.S3Endpoint = "localhost:9000"
+				c.S3AccessKeyID = "testkey"
+				c.S3SecretAccessKey = "testsecret"
+				c.S3Region = "us-east-1"
+			}),
 			expectError:    true,
 			expectedErrMsg: "invalid configuration",
 		},
 		{
 			name: "missing bucket name",
-			config: &config.Config{
-				Port:                 "8080",
-				Host:                 "localhost",
-				BasePath:             "/tmp",
-				BucketName:           "", // Invalid
-				S3Endpoint:           "localhost:9000",
-				S3AccessKeyID:        "testkey",
-				S3SecretAccessKey:    "testsecret",
-				S3Region:             "us-east-1",
-				LogLevel:             "info",
-				DefaultCacheDuration: time.Hour,
-				CacheStrategy:        "no-cache",
-			},
+			config: newStorageFactoryConfig(func(c *config.Config) {
+				c.BucketName = "" // Invalid
+				c.S3Endpoint = "localhost:9000"
+				c.S3AccessKeyID = "testkey"
+				c.S3SecretAccessKey = "testsecret"
+				c.S3Region = "us-east-1"
+			}),
 			expectError:    true,
 			expectedErrMsg: "invalid configuration",
 		},
@@ -204,6 +154,21 @@ func TestNewStorage_ConfigValidation(t *testing.T) {
 			}
 		})
 	}
+}
+
+func newStorageFactoryConfig(overrides ...func(*config.Config)) *config.Config {
+	cfg := config.DefaultConfig()
+	cfg.Host = "localhost"
+	cfg.BasePath = "/tmp"
+	cfg.BucketName = "test-bucket"
+	cfg.DefaultCacheDuration = time.Hour
+	cfg.CacheStrategy = "no-cache"
+
+	for _, override := range overrides {
+		override(cfg)
+	}
+
+	return cfg
 }
 
 // Helper function to check if error message contains any of the expected strings
