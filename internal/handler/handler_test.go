@@ -6,7 +6,6 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
-	"errors"
 	"image"
 	"image/color"
 	"image/gif"
@@ -17,7 +16,6 @@ import (
 	"net/http/httptest"
 	"s3-static/internal/storage"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -39,51 +37,6 @@ type openFileMockStorage struct {
 	openCalls int
 	infoCalls int
 	readCalls int
-}
-
-type recordingOptimizerTrigger struct {
-	mu     sync.Mutex
-	calls  []string
-	err    error
-	called chan string
-}
-
-func newRecordingOptimizerTrigger(err error) *recordingOptimizerTrigger {
-	return &recordingOptimizerTrigger{
-		err:    err,
-		called: make(chan string, 4),
-	}
-}
-
-func (t *recordingOptimizerTrigger) Trigger(ctx context.Context, key string) error {
-	t.mu.Lock()
-	t.calls = append(t.calls, key)
-	t.mu.Unlock()
-	select {
-	case t.called <- key:
-	default:
-	}
-	return t.err
-}
-
-func (t *recordingOptimizerTrigger) waitForCall(tb testing.TB) string {
-	tb.Helper()
-	select {
-	case key := <-t.called:
-		return key
-	case <-time.After(time.Second):
-		tb.Fatal("timed out waiting for optimizer trigger")
-		return ""
-	}
-}
-
-func assertNoOptimizerTrigger(tb testing.TB, trigger *recordingOptimizerTrigger) {
-	tb.Helper()
-	select {
-	case got := <-trigger.called:
-		tb.Fatalf("Expected no optimizer trigger, got %q", got)
-	default:
-	}
 }
 
 func newMockStorage() *mockStorage {
@@ -918,8 +871,7 @@ func TestFileHandler_OptimizedImageHit(t *testing.T) {
 	source := newMockStorage()
 	optimizedBase := newMockStorage()
 	optimized := &openFileMockStorage{mockStorage: optimizedBase}
-	trigger := newRecordingOptimizerTrigger(nil)
-	handler := NewFileHandlerWithOptimizedStorageAndTrigger(source, optimized, trigger, cfg, logger)
+	handler := NewFileHandlerWithOptimizedStorage(source, optimized, cfg, logger)
 
 	sourceTime := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 	optimizedTime := sourceTime.Add(time.Minute)
@@ -948,7 +900,6 @@ func TestFileHandler_OptimizedImageHit(t *testing.T) {
 	if optimized.openCalls != 1 {
 		t.Fatalf("Expected optimized storage to be opened once, got %d", optimized.openCalls)
 	}
-	assertNoOptimizerTrigger(t, trigger)
 }
 
 func TestFileHandler_OptimizedImageFallbackStatuses(t *testing.T) {
@@ -1018,71 +969,13 @@ func TestFileHandler_OptimizedImageFallbackStatuses(t *testing.T) {
 	}
 }
 
-func TestFileHandler_OptimizedImageMissTriggersOptimization(t *testing.T) {
-	cfg := optimizedTestConfig()
-	logger := config.NewLogger("error")
-	source := newMockStorage()
-	optimizedBase := newMockStorage()
-	optimized := &openFileMockStorage{mockStorage: optimizedBase}
-	trigger := newRecordingOptimizerTrigger(nil)
-	handler := NewFileHandlerWithOptimizedStorageAndTrigger(source, optimized, trigger, cfg, logger)
-
-	modTime := time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
-	source.addFileWithMetadata("photo.jpg", []byte("source image"), modTime, "source-etag", "image/jpeg", nil)
-
-	req := httptest.NewRequest(http.MethodGet, "/photo.jpg", nil)
-	w := httptest.NewRecorder()
-	handler.ServeHTTP(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Fatalf("Expected status 200, got %d", w.Code)
-	}
-	if w.Body.String() != "source image" {
-		t.Fatalf("Expected source body, got %q", w.Body.String())
-	}
-	if got := w.Header().Get(optimizedStatusHeader); got != "miss" {
-		t.Fatalf("Expected optimized miss header, got %q", got)
-	}
-	if got := trigger.waitForCall(t); got != "photo.jpg" {
-		t.Fatalf("Expected one trigger for photo.jpg, got %q", got)
-	}
-}
-
-func TestFileHandler_OptimizedImageTriggerFailureStillServesSource(t *testing.T) {
-	cfg := optimizedTestConfig()
-	logger := config.NewLogger("error")
-	source := newMockStorage()
-	optimizedBase := newMockStorage()
-	optimized := &openFileMockStorage{mockStorage: optimizedBase}
-	trigger := newRecordingOptimizerTrigger(errors.New("optimizer down"))
-	handler := NewFileHandlerWithOptimizedStorageAndTrigger(source, optimized, trigger, cfg, logger)
-
-	modTime := time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
-	source.addFileWithMetadata("photo.jpg", []byte("source image"), modTime, "source-etag", "image/jpeg", nil)
-
-	req := httptest.NewRequest(http.MethodGet, "/photo.jpg", nil)
-	w := httptest.NewRecorder()
-	handler.ServeHTTP(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Fatalf("Expected status 200, got %d", w.Code)
-	}
-	if w.Body.String() != "source image" {
-		t.Fatalf("Expected source body, got %q", w.Body.String())
-	}
-	if got := trigger.waitForCall(t); got != "photo.jpg" {
-		t.Fatalf("Expected trigger call despite trigger failure, got %q", got)
-	}
-}
-
 func TestFileHandler_OptimizedImageSkipsRangeRequest(t *testing.T) {
 	cfg := optimizedTestConfig()
 	logger := config.NewLogger("info")
 	source := newMockStorage()
 	optimizedBase := newMockStorage()
 	optimized := &openFileMockStorage{mockStorage: optimizedBase}
-	trigger := newRecordingOptimizerTrigger(nil)
-	handler := NewFileHandlerWithOptimizedStorageAndTrigger(source, optimized, trigger, cfg, logger)
+	handler := NewFileHandlerWithOptimizedStorage(source, optimized, cfg, logger)
 
 	modTime := time.Now().UTC().Truncate(time.Second)
 	source.addFileWithMetadata("photo.jpg", []byte("Hello, Range!"), modTime, "source-etag", "image/jpeg", nil)
@@ -1108,7 +1001,6 @@ func TestFileHandler_OptimizedImageSkipsRangeRequest(t *testing.T) {
 	if optimized.openCalls != 0 || optimized.infoCalls != 0 || optimized.readCalls != 0 {
 		t.Fatalf("Expected optimized storage not to be used, got open=%d info=%d read=%d", optimized.openCalls, optimized.infoCalls, optimized.readCalls)
 	}
-	assertNoOptimizerTrigger(t, trigger)
 }
 
 func TestFileHandler_OptimizedImageSkipsHeadAndMetadata(t *testing.T) {
@@ -1164,8 +1056,7 @@ func TestFileHandler_OptimizedImageSkipsHeadAndMetadata(t *testing.T) {
 			source := newMockStorage()
 			optimizedBase := newMockStorage()
 			optimized := &openFileMockStorage{mockStorage: optimizedBase}
-			trigger := newRecordingOptimizerTrigger(nil)
-			handler := NewFileHandlerWithOptimizedStorageAndTrigger(source, optimized, trigger, cfg, logger)
+			handler := NewFileHandlerWithOptimizedStorage(source, optimized, cfg, logger)
 
 			source.addFileWithMetadata("photo.jpg", []byte("original image"), modTime, "source-etag", "image/jpeg", nil)
 			optimizedBase.addFileWithMetadata("photo.jpg", []byte("optimized image"), modTime, "optimized-etag", "image/jpeg", map[string]string{
@@ -1184,7 +1075,6 @@ func TestFileHandler_OptimizedImageSkipsHeadAndMetadata(t *testing.T) {
 			if optimized.openCalls != 0 || optimized.infoCalls != 0 || optimized.readCalls != 0 {
 				t.Fatalf("Expected optimized storage not to be used, got open=%d info=%d read=%d", optimized.openCalls, optimized.infoCalls, optimized.readCalls)
 			}
-			assertNoOptimizerTrigger(t, trigger)
 		})
 	}
 }
@@ -1195,8 +1085,7 @@ func TestFileHandler_OptimizedImageSkipsNonImage(t *testing.T) {
 	source := newMockStorage()
 	optimizedBase := newMockStorage()
 	optimized := &openFileMockStorage{mockStorage: optimizedBase}
-	trigger := newRecordingOptimizerTrigger(nil)
-	handler := NewFileHandlerWithOptimizedStorageAndTrigger(source, optimized, trigger, cfg, logger)
+	handler := NewFileHandlerWithOptimizedStorage(source, optimized, cfg, logger)
 
 	modTime := time.Now().UTC().Truncate(time.Second)
 	source.addFileWithMetadata("document.pdf", []byte("original pdf"), modTime, "source-etag", "application/pdf", nil)
@@ -1221,7 +1110,6 @@ func TestFileHandler_OptimizedImageSkipsNonImage(t *testing.T) {
 	if optimized.openCalls != 0 || optimized.infoCalls != 0 || optimized.readCalls != 0 {
 		t.Fatalf("Expected optimized storage not to be used, got open=%d info=%d read=%d", optimized.openCalls, optimized.infoCalls, optimized.readCalls)
 	}
-	assertNoOptimizerTrigger(t, trigger)
 }
 
 func TestFileHandler_OptimizedImageConditionalsUseSourceETag(t *testing.T) {
