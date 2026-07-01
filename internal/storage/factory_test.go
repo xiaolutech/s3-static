@@ -156,6 +156,19 @@ func TestNewStorage_ConfigValidation(t *testing.T) {
 	}
 }
 
+func TestNewS3StorageForBucketRejectsEmptyBucket(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.S3Endpoint = "localhost:9000"
+	cfg.S3AccessKeyID = "key"
+	cfg.S3SecretAccessKey = "secret"
+	cfg.S3Region = "us-east-1"
+
+	_, err := NewS3StorageForBucket(cfg, "")
+	if err == nil {
+		t.Fatal("Expected error for empty bucket")
+	}
+}
+
 func newStorageFactoryConfig(overrides ...func(*config.Config)) *config.Config {
 	cfg := config.DefaultConfig()
 	cfg.Host = "localhost"

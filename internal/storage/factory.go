@@ -36,3 +36,21 @@ func NewStorage(cfg *config.Config) (interfaces.Storage, error) {
 	// In the future, we could add local file storage as fallback
 	return nil, fmt.Errorf("no storage backend configured - S3_ENDPOINT is required")
 }
+
+func NewS3StorageForBucket(cfg *config.Config, bucket string) (*S3Storage, error) {
+	if bucket == "" {
+		return nil, fmt.Errorf("bucket cannot be empty")
+	}
+	if err := cfg.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid configuration: %w", err)
+	}
+	s3Config := S3Config{
+		Endpoint:        cfg.S3Endpoint,
+		AccessKeyID:     cfg.S3AccessKeyID,
+		SecretAccessKey: cfg.S3SecretAccessKey,
+		UseSSL:          cfg.S3UseSSL,
+		Region:          cfg.S3Region,
+		Bucket:          bucket,
+	}
+	return NewS3Storage(s3Config)
+}
