@@ -33,12 +33,6 @@ func TestDefaultConfig(t *testing.T) {
 	if config.OptimizedMinBytes != 512*1024 {
 		t.Errorf("Expected default optimized min bytes to be 524288, got %d", config.OptimizedMinBytes)
 	}
-	if config.OptimizerTriggerURL != "" {
-		t.Errorf("Expected default optimizer trigger URL to be empty, got '%s'", config.OptimizerTriggerURL)
-	}
-	if config.OptimizerTriggerTimeout != 2*time.Second {
-		t.Errorf("Expected default optimizer trigger timeout 2s, got %v", config.OptimizerTriggerTimeout)
-	}
 	if config.DefaultCacheDuration != time.Hour*24*365 {
 		t.Errorf("Expected default cache duration to be 1 year, got %v", config.DefaultCacheDuration)
 	}
@@ -78,8 +72,6 @@ func TestLoadFromEnv_WithEnvironmentVariables(t *testing.T) {
 	os.Setenv("OPTIMIZED_BUCKET_NAME", "optimized-assets")
 	os.Setenv("OPTIMIZATION_PROFILE", "v2-jpeg76-w2560")
 	os.Setenv("OPTIMIZED_MIN_BYTES", "262144")
-	os.Setenv("OPTIMIZER_TRIGGER_URL", "http://s3-image-optimizer:8080/optimize")
-	os.Setenv("OPTIMIZER_TRIGGER_TIMEOUT", "1500ms")
 	os.Setenv("LOG_LEVEL", "debug")
 
 	config, err := LoadFromEnv()
@@ -113,12 +105,6 @@ func TestLoadFromEnv_WithEnvironmentVariables(t *testing.T) {
 	}
 	if config.OptimizedMinBytes != 262144 {
 		t.Errorf("Expected optimized min bytes 262144, got %d", config.OptimizedMinBytes)
-	}
-	if config.OptimizerTriggerURL != "http://s3-image-optimizer:8080/optimize" {
-		t.Errorf("Expected optimizer trigger URL to be loaded, got '%s'", config.OptimizerTriggerURL)
-	}
-	if config.OptimizerTriggerTimeout != 1500*time.Millisecond {
-		t.Errorf("Expected optimizer trigger timeout 1500ms, got %v", config.OptimizerTriggerTimeout)
 	}
 	if config.LogLevel != "debug" {
 		t.Errorf("Expected log level 'debug', got '%s'", config.LogLevel)
@@ -155,28 +141,6 @@ func TestLoadFromEnv_InvalidOptimizedMinBytes(t *testing.T) {
 	_, err := LoadFromEnv()
 	if err == nil {
 		t.Error("Expected error for invalid optimized min bytes value, got nil")
-	}
-}
-
-func TestLoadFromEnv_InvalidOptimizerTriggerURL(t *testing.T) {
-	clearEnvVars(t)
-
-	os.Setenv("OPTIMIZER_TRIGGER_URL", "://bad-url")
-
-	_, err := LoadFromEnv()
-	if err == nil {
-		t.Error("Expected error for invalid optimizer trigger URL, got nil")
-	}
-}
-
-func TestLoadFromEnv_InvalidOptimizerTriggerTimeout(t *testing.T) {
-	clearEnvVars(t)
-
-	os.Setenv("OPTIMIZER_TRIGGER_TIMEOUT", "soon")
-
-	_, err := LoadFromEnv()
-	if err == nil {
-		t.Error("Expected error for invalid optimizer trigger timeout, got nil")
 	}
 }
 
@@ -293,37 +257,6 @@ func TestValidate_OptimizationProfileCannotBeEmpty(t *testing.T) {
 	}
 }
 
-func TestValidate_OptimizerTriggerTimeoutMustBePositive(t *testing.T) {
-	config := DefaultConfig()
-	config.OptimizerTriggerURL = "http://s3-image-optimizer:8080/optimize"
-	config.OptimizerTriggerTimeout = 0
-
-	err := config.Validate()
-	if err == nil {
-		t.Error("Expected error for non-positive optimizer trigger timeout, got nil")
-	}
-}
-
-func TestValidate_OptimizerTriggerURLMustBeAbsoluteHTTP(t *testing.T) {
-	tests := []string{
-		"://bad-url",
-		"ftp://s3-image-optimizer/optimize",
-		"/optimize",
-	}
-
-	for _, triggerURL := range tests {
-		t.Run(triggerURL, func(t *testing.T) {
-			config := DefaultConfig()
-			config.OptimizerTriggerURL = triggerURL
-
-			err := config.Validate()
-			if err == nil {
-				t.Error("Expected error for invalid optimizer trigger URL, got nil")
-			}
-		})
-	}
-}
-
 func TestGetAddress(t *testing.T) {
 	config := &Config{
 		Host: "localhost",
@@ -346,7 +279,6 @@ func clearEnvVars(t *testing.T) {
 		"CACHE_DURATION", "CACHE_STRATEGY",
 		"LOG_LEVEL",
 		"OPTIMIZED_IMAGE_ENABLED", "OPTIMIZED_BUCKET_NAME", "OPTIMIZATION_PROFILE", "OPTIMIZED_MIN_BYTES",
-		"OPTIMIZER_TRIGGER_URL", "OPTIMIZER_TRIGGER_TIMEOUT",
 	}
 
 	original := make(map[string]string, len(envVars))
