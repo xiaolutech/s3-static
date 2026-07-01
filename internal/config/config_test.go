@@ -42,8 +42,7 @@ func TestDefaultConfig(t *testing.T) {
 }
 
 func TestLoadFromEnv_WithDefaults(t *testing.T) {
-	// Clear environment variables
-	clearEnvVars()
+	clearEnvVars(t)
 
 	config, err := LoadFromEnv()
 	if err != nil {
@@ -61,6 +60,8 @@ func TestLoadFromEnv_WithDefaults(t *testing.T) {
 }
 
 func TestLoadFromEnv_WithEnvironmentVariables(t *testing.T) {
+	clearEnvVars(t)
+
 	// Set environment variables
 	os.Setenv("PORT", "9000")
 	os.Setenv("HOST", "127.0.0.1")
@@ -72,7 +73,6 @@ func TestLoadFromEnv_WithEnvironmentVariables(t *testing.T) {
 	os.Setenv("OPTIMIZATION_PROFILE", "v2-jpeg76-w2560")
 	os.Setenv("OPTIMIZED_MIN_BYTES", "262144")
 	os.Setenv("LOG_LEVEL", "debug")
-	defer clearEnvVars()
 
 	config, err := LoadFromEnv()
 	if err != nil {
@@ -112,12 +112,35 @@ func TestLoadFromEnv_WithEnvironmentVariables(t *testing.T) {
 }
 
 func TestLoadFromEnv_InvalidCacheDuration(t *testing.T) {
+	clearEnvVars(t)
+
 	os.Setenv("CACHE_DURATION", "invalid-duration")
-	defer clearEnvVars()
 
 	_, err := LoadFromEnv()
 	if err == nil {
 		t.Error("Expected error for invalid cache duration, got nil")
+	}
+}
+
+func TestLoadFromEnv_InvalidOptimizedImageEnabled(t *testing.T) {
+	clearEnvVars(t)
+
+	os.Setenv("OPTIMIZED_IMAGE_ENABLED", "sometimes")
+
+	_, err := LoadFromEnv()
+	if err == nil {
+		t.Error("Expected error for invalid optimized image enabled value, got nil")
+	}
+}
+
+func TestLoadFromEnv_InvalidOptimizedMinBytes(t *testing.T) {
+	clearEnvVars(t)
+
+	os.Setenv("OPTIMIZED_MIN_BYTES", "invalid-bytes")
+
+	_, err := LoadFromEnv()
+	if err == nil {
+		t.Error("Expected error for invalid optimized min bytes value, got nil")
 	}
 }
 
@@ -246,12 +269,35 @@ func TestGetAddress(t *testing.T) {
 }
 
 // Helper function to clear environment variables
-func clearEnvVars() {
+func clearEnvVars(t *testing.T) {
+	t.Helper()
+
 	envVars := []string{
-		"PORT", "HOST", "BASE_PATH", "BUCKET_NAME", "CACHE_DURATION", "LOG_LEVEL",
+		"PORT", "HOST",
+		"BASE_PATH", "BUCKET_NAME",
+		"S3_ENDPOINT", "S3_REGION", "S3_ACCESS_KEY_ID", "S3_SECRET_ACCESS_KEY", "S3_USE_SSL",
+		"CACHE_DURATION", "CACHE_STRATEGY",
+		"LOG_LEVEL",
 		"OPTIMIZED_IMAGE_ENABLED", "OPTIMIZED_BUCKET_NAME", "OPTIMIZATION_PROFILE", "OPTIMIZED_MIN_BYTES",
 	}
+
+	original := make(map[string]string, len(envVars))
+	present := make(map[string]bool, len(envVars))
 	for _, env := range envVars {
+		if value, ok := os.LookupEnv(env); ok {
+			original[env] = value
+			present[env] = true
+		}
 		os.Unsetenv(env)
 	}
+
+	t.Cleanup(func() {
+		for _, env := range envVars {
+			if present[env] {
+				os.Setenv(env, original[env])
+			} else {
+				os.Unsetenv(env)
+			}
+		}
+	})
 }
