@@ -124,6 +124,7 @@ func (h *FileHandler) handleGetObject(w http.ResponseWriter, r *http.Request) {
 			)
 			return
 		}
+		h.triggerOptimization(sourceInfo, status)
 	}
 
 	openedFile, err := h.openFile(ctx, path)
@@ -312,6 +313,26 @@ func (h *FileHandler) openTrustedOptimized(ctx context.Context, source *interfac
 		return nil, "profile-mismatch"
 	}
 	return optimized, "hit"
+}
+
+func (h *FileHandler) triggerOptimization(source *interfaces.FileInfo, status string) {
+	if h.optimizerTrigger == nil || source == nil {
+		return
+	}
+	switch status {
+	case "miss", "stale", "profile-mismatch":
+	default:
+		return
+	}
+
+	key := strings.TrimPrefix(source.Path, "/")
+	go func() {
+		if err := h.optimizerTrigger.Trigger(context.Background(), key); err != nil {
+			h.logger.Warn("Optimizer trigger failed", "path", source.Path, "status", status, "error", err)
+		} else {
+			h.logger.Debug("Optimizer trigger queued", "path", source.Path, "status", status)
+		}
+	}()
 }
 
 func (h *FileHandler) serveOpenedFile(w http.ResponseWriter, r *http.Request, path string, openedFile *interfaces.OpenedFile) {
