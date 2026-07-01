@@ -21,6 +21,18 @@ func TestDefaultConfig(t *testing.T) {
 	if config.BucketName != "default" {
 		t.Errorf("Expected default bucket name to be 'default', got '%s'", config.BucketName)
 	}
+	if config.OptimizedImageEnabled {
+		t.Error("Expected optimized image serving to be disabled by default")
+	}
+	if config.OptimizedBucketName != "" {
+		t.Errorf("Expected default optimized bucket name to be empty, got '%s'", config.OptimizedBucketName)
+	}
+	if config.OptimizationProfile != "v1-jpeg82-png-best-w1920" {
+		t.Errorf("Expected default optimization profile to be 'v1-jpeg82-png-best-w1920', got '%s'", config.OptimizationProfile)
+	}
+	if config.OptimizedMinBytes != 512*1024 {
+		t.Errorf("Expected default optimized min bytes to be 524288, got %d", config.OptimizedMinBytes)
+	}
 	if config.DefaultCacheDuration != time.Hour*24*365 {
 		t.Errorf("Expected default cache duration to be 1 year, got %v", config.DefaultCacheDuration)
 	}
@@ -55,6 +67,10 @@ func TestLoadFromEnv_WithEnvironmentVariables(t *testing.T) {
 	os.Setenv("BASE_PATH", "/custom/path")
 	os.Setenv("BUCKET_NAME", "custom-bucket")
 	os.Setenv("CACHE_DURATION", "2h30m")
+	os.Setenv("OPTIMIZED_IMAGE_ENABLED", "true")
+	os.Setenv("OPTIMIZED_BUCKET_NAME", "optimized-assets")
+	os.Setenv("OPTIMIZATION_PROFILE", "v2-jpeg76-w2560")
+	os.Setenv("OPTIMIZED_MIN_BYTES", "262144")
 	os.Setenv("LOG_LEVEL", "debug")
 	defer clearEnvVars()
 
@@ -77,6 +93,18 @@ func TestLoadFromEnv_WithEnvironmentVariables(t *testing.T) {
 	}
 	if config.DefaultCacheDuration != 2*time.Hour+30*time.Minute {
 		t.Errorf("Expected cache duration '2h30m', got %v", config.DefaultCacheDuration)
+	}
+	if !config.OptimizedImageEnabled {
+		t.Error("Expected optimized image serving to be enabled")
+	}
+	if config.OptimizedBucketName != "optimized-assets" {
+		t.Errorf("Expected optimized bucket name 'optimized-assets', got '%s'", config.OptimizedBucketName)
+	}
+	if config.OptimizationProfile != "v2-jpeg76-w2560" {
+		t.Errorf("Expected optimization profile 'v2-jpeg76-w2560', got '%s'", config.OptimizationProfile)
+	}
+	if config.OptimizedMinBytes != 262144 {
+		t.Errorf("Expected optimized min bytes 262144, got %d", config.OptimizedMinBytes)
 	}
 	if config.LogLevel != "debug" {
 		t.Errorf("Expected log level 'debug', got '%s'", config.LogLevel)
@@ -164,6 +192,48 @@ func TestValidate_InvalidLogLevel(t *testing.T) {
 	}
 }
 
+func TestValidate_OptimizedServingRequiresBucket(t *testing.T) {
+	config := DefaultConfig()
+	config.OptimizedImageEnabled = true
+	config.OptimizedBucketName = ""
+
+	err := config.Validate()
+	if err == nil {
+		t.Error("Expected error when optimized image serving is enabled without a bucket, got nil")
+	}
+}
+
+func TestValidate_OptimizedServingValid(t *testing.T) {
+	config := DefaultConfig()
+	config.OptimizedImageEnabled = true
+	config.OptimizedBucketName = "optimized-assets"
+
+	err := config.Validate()
+	if err != nil {
+		t.Errorf("Expected no error for valid optimized image serving config, got %v", err)
+	}
+}
+
+func TestValidate_OptimizedMinBytesCannotBeNegative(t *testing.T) {
+	config := DefaultConfig()
+	config.OptimizedMinBytes = -1
+
+	err := config.Validate()
+	if err == nil {
+		t.Error("Expected error for negative optimized min bytes, got nil")
+	}
+}
+
+func TestValidate_OptimizationProfileCannotBeEmpty(t *testing.T) {
+	config := DefaultConfig()
+	config.OptimizationProfile = ""
+
+	err := config.Validate()
+	if err == nil {
+		t.Error("Expected error for empty optimization profile, got nil")
+	}
+}
+
 func TestGetAddress(t *testing.T) {
 	config := &Config{
 		Host: "localhost",
@@ -179,6 +249,7 @@ func TestGetAddress(t *testing.T) {
 func clearEnvVars() {
 	envVars := []string{
 		"PORT", "HOST", "BASE_PATH", "BUCKET_NAME", "CACHE_DURATION", "LOG_LEVEL",
+		"OPTIMIZED_IMAGE_ENABLED", "OPTIMIZED_BUCKET_NAME", "OPTIMIZATION_PROFILE", "OPTIMIZED_MIN_BYTES",
 	}
 	for _, env := range envVars {
 		os.Unsetenv(env)

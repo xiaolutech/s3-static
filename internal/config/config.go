@@ -17,6 +17,12 @@ type Config struct {
 	BasePath   string `env:"BASE_PATH"`
 	BucketName string `env:"BUCKET_NAME"`
 
+	// Optimized image serving configuration
+	OptimizedImageEnabled bool   `env:"OPTIMIZED_IMAGE_ENABLED"`
+	OptimizedBucketName   string `env:"OPTIMIZED_BUCKET_NAME"`
+	OptimizationProfile   string `env:"OPTIMIZATION_PROFILE"`
+	OptimizedMinBytes     int64  `env:"OPTIMIZED_MIN_BYTES"`
+
 	// S3 Storage configuration
 	S3Endpoint        string `env:"S3_ENDPOINT"`
 	S3Region          string `env:"S3_REGION"`
@@ -35,15 +41,19 @@ type Config struct {
 // DefaultConfig returns a Config with default values
 func DefaultConfig() *Config {
 	return &Config{
-		Port:                 "8080",
-		Host:                 "0.0.0.0",
-		BasePath:             "./data",
-		BucketName:           "default",
-		S3Region:             "us-east-1",
-		S3UseSSL:             true,
-		DefaultCacheDuration: time.Hour * 24 * 365, // 1 year
-		CacheStrategy:        "immutable",          // Default strategy
-		LogLevel:             "info",
+		Port:                  "8080",
+		Host:                  "0.0.0.0",
+		BasePath:              "./data",
+		BucketName:            "default",
+		OptimizedImageEnabled: false,
+		OptimizedBucketName:   "",
+		OptimizationProfile:   "v1-jpeg82-png-best-w1920",
+		OptimizedMinBytes:     512 * 1024,
+		S3Region:              "us-east-1",
+		S3UseSSL:              true,
+		DefaultCacheDuration:  time.Hour * 24 * 365, // 1 year
+		CacheStrategy:         "immutable",          // Default strategy
+		LogLevel:              "info",
 	}
 }
 
@@ -63,6 +73,12 @@ func LoadFromEnv() (*Config, error) {
 	}
 	if bucketName := os.Getenv("BUCKET_NAME"); bucketName != "" {
 		config.BucketName = bucketName
+	}
+	if optimizedBucketName, ok := os.LookupEnv("OPTIMIZED_BUCKET_NAME"); ok {
+		config.OptimizedBucketName = optimizedBucketName
+	}
+	if optimizationProfile, ok := os.LookupEnv("OPTIMIZATION_PROFILE"); ok {
+		config.OptimizationProfile = optimizationProfile
 	}
 	if logLevel := os.Getenv("LOG_LEVEL"); logLevel != "" {
 		config.LogLevel = logLevel
@@ -93,6 +109,13 @@ func LoadFromEnv() (*Config, error) {
 		}
 		config.S3UseSSL = useSSL
 	}
+	if optimizedImageEnabledStr := os.Getenv("OPTIMIZED_IMAGE_ENABLED"); optimizedImageEnabledStr != "" {
+		optimizedImageEnabled, err := strconv.ParseBool(optimizedImageEnabledStr)
+		if err != nil {
+			return nil, fmt.Errorf("invalid OPTIMIZED_IMAGE_ENABLED format: %w", err)
+		}
+		config.OptimizedImageEnabled = optimizedImageEnabled
+	}
 
 	// Load duration value
 	if cacheDurationStr := os.Getenv("CACHE_DURATION"); cacheDurationStr != "" {
@@ -101,6 +124,13 @@ func LoadFromEnv() (*Config, error) {
 			return nil, fmt.Errorf("invalid CACHE_DURATION format: %w", err)
 		}
 		config.DefaultCacheDuration = duration
+	}
+	if optimizedMinBytesStr := os.Getenv("OPTIMIZED_MIN_BYTES"); optimizedMinBytesStr != "" {
+		optimizedMinBytes, err := strconv.ParseInt(optimizedMinBytesStr, 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("invalid OPTIMIZED_MIN_BYTES format: %w", err)
+		}
+		config.OptimizedMinBytes = optimizedMinBytes
 	}
 
 	// Validate configuration
@@ -132,6 +162,18 @@ func (c *Config) Validate() error {
 
 	if c.BucketName == "" {
 		return fmt.Errorf("bucket name cannot be empty")
+	}
+
+	if c.OptimizedImageEnabled && c.OptimizedBucketName == "" {
+		return fmt.Errorf("OPTIMIZED_BUCKET_NAME is required when OPTIMIZED_IMAGE_ENABLED is true")
+	}
+
+	if c.OptimizedMinBytes < 0 {
+		return fmt.Errorf("OPTIMIZED_MIN_BYTES cannot be negative, got: %d", c.OptimizedMinBytes)
+	}
+
+	if c.OptimizationProfile == "" {
+		return fmt.Errorf("OPTIMIZATION_PROFILE cannot be empty")
 	}
 
 	if c.DefaultCacheDuration <= 0 {
