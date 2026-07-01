@@ -246,8 +246,8 @@ func TestGitHubActionsWorkflow(t *testing.T) {
 	// Test for required workflow elements
 	requiredElements := []string{
 		"name: Build and Push Docker Image",
-		"docker/build-push-action@v5",
-		"docker/setup-buildx-action@v3",
+		"docker/build-push-action@v7",
+		"docker/setup-buildx-action@v4",
 		"linux/amd64,linux/arm64", // Multi-platform support
 		"ghcr.io",                 // GitHub Container Registry
 	}
@@ -265,36 +265,6 @@ func TestGitHubActionsWorkflow(t *testing.T) {
 	
 	if !strings.Contains(workflow, "packages: write") {
 		t.Error("Workflow should have package write permissions")
-	}
-}
-
-// TestDockerHubWorkflowExample tests the Docker Hub workflow example
-func TestDockerHubWorkflowExample(t *testing.T) {
-	examplePath := ".github/workflows/docker-hub.yml.example"
-	
-	if _, err := os.Stat(examplePath); os.IsNotExist(err) {
-		t.Fatal("Docker Hub workflow example does not exist")
-	}
-	
-	content, err := os.ReadFile(examplePath)
-	if err != nil {
-		t.Fatalf("Failed to read Docker Hub workflow example: %v", err)
-	}
-	
-	workflow := string(content)
-	
-	// Test for Docker Hub specific elements
-	requiredElements := []string{
-		"DOCKERHUB_USERNAME",
-		"DOCKERHUB_TOKEN",
-		"your-dockerhub-username/s3-static",
-		"docker/login-action@v3",
-	}
-	
-	for _, element := range requiredElements {
-		if !strings.Contains(workflow, element) {
-			t.Errorf("Docker Hub workflow example should contain: %s", element)
-		}
 	}
 }
 

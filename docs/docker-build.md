@@ -36,7 +36,7 @@ docker run -p 8080:8080 ghcr.io/your-username/s3-static:latest
 
 如果你想推送到 Docker Hub，可以：
 
-1. 重命名 `.github/workflows/docker-hub.yml.example` 为 `.github/workflows/docker-hub.yml`
+1. 在 `docker-build.yml` 的 `Login to DockerHub` 步骤中确认已启用 Docker Hub 阶段
 2. 在 GitHub 仓库设置中添加以下 Secrets：
    - `DOCKERHUB_USERNAME`: 你的 Docker Hub 用户名
    - `DOCKERHUB_TOKEN`: 你的 Docker Hub 访问令牌
