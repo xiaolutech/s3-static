@@ -61,13 +61,11 @@ func TestLoadFromEnv_CacheStrategy(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			// Clear environment variables first
-			clearCacheEnvVars()
+			clearEnvVars(t)
 
 			if tc.envValue != "" {
 				os.Setenv("CACHE_STRATEGY", tc.envValue)
 			}
-			defer clearCacheEnvVars()
 
 			config, err := LoadFromEnv()
 
@@ -163,17 +161,6 @@ func TestValidate_CacheStrategy(t *testing.T) {
 				}
 			}
 		})
-	}
-}
-
-// Helper function to clear cache-related environment variables
-func clearCacheEnvVars() {
-	envVars := []string{
-		"CACHE_STRATEGY",
-		"CACHE_DURATION",
-	}
-	for _, env := range envVars {
-		os.Unsetenv(env)
 	}
 }
 
