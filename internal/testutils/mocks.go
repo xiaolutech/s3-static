@@ -199,7 +199,18 @@ func (m *MockStorage) AddFileWithMetadata(path string, content []byte, modTime t
 	m.AddFile(path, content, modTime, etag)
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.files[path].Metadata = metadata
+	m.files[path].Metadata = normalizeMockMetadata(metadata)
+}
+
+func normalizeMockMetadata(metadata map[string]string) map[string]string {
+	if len(metadata) == 0 {
+		return nil
+	}
+	result := make(map[string]string, len(metadata))
+	for key, value := range metadata {
+		result[strings.ToLower(key)] = value
+	}
+	return result
 }
 
 // AddDirectory adds a directory to the mock storage

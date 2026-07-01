@@ -177,8 +177,8 @@ func TestS3Storage_GetFileInfoIncludesMetadata(t *testing.T) {
 		Body:        strings.NewReader("content"),
 		ContentType: aws.String("image/jpeg"),
 		Metadata: map[string]string{
-			"source-etag":          "source-123",
-			"optimization-profile": "v1-jpeg82-png-best-w1920",
+			"Source-ETag":          "source-123",
+			"Optimization-Profile": "v1-jpeg82-png-best-w1920",
 		},
 	})
 	if err != nil {
@@ -189,11 +189,49 @@ func TestS3Storage_GetFileInfoIncludesMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetFileInfo failed: %v", err)
 	}
-	if info.Metadata["source-etag"] != "source-123" {
-		t.Fatalf("Expected source-etag metadata, got %#v", info.Metadata)
+	assertOptimizedObjectMetadata(t, info.Metadata)
+}
+
+func TestS3Storage_OpenFileContextIncludesMetadata(t *testing.T) {
+	container, storage := setupMinIOContainer(t)
+	defer container.Terminate(context.Background())
+
+	_, err := storage.client.PutObject(context.Background(), &awss3.PutObjectInput{
+		Bucket:      aws.String(testBucket),
+		Key:         aws.String("optimized/open-photo.jpg"),
+		Body:        strings.NewReader("content"),
+		ContentType: aws.String("image/jpeg"),
+		Metadata: map[string]string{
+			"Source-ETag":          "source-123",
+			"Optimization-Profile": "v1-jpeg82-png-best-w1920",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Failed to upload object: %v", err)
 	}
-	if info.Metadata["optimization-profile"] != "v1-jpeg82-png-best-w1920" {
-		t.Fatalf("Expected optimization-profile metadata, got %#v", info.Metadata)
+
+	opened, err := storage.OpenFileContext(context.Background(), "optimized/open-photo.jpg")
+	if err != nil {
+		t.Fatalf("OpenFileContext failed: %v", err)
+	}
+	defer opened.Reader.Close()
+
+	assertOptimizedObjectMetadata(t, opened.Info.Metadata)
+}
+
+func assertOptimizedObjectMetadata(t *testing.T, metadata map[string]string) {
+	t.Helper()
+
+	if metadata["source-etag"] != "source-123" {
+		t.Fatalf("Expected source-etag metadata, got %#v", metadata)
+	}
+	if metadata["optimization-profile"] != "v1-jpeg82-png-best-w1920" {
+		t.Fatalf("Expected optimization-profile metadata, got %#v", metadata)
+	}
+	for _, key := range []string{"Source-ETag", "Optimization-Profile"} {
+		if _, exists := metadata[key]; exists {
+			t.Fatalf("Expected metadata keys normalized to lowercase, got %#v", metadata)
+		}
 	}
 }
 
