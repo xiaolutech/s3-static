@@ -12,8 +12,9 @@ type FileInfo struct {
 	Size        int64
 	ModTime     time.Time
 	IsDir       bool
-	ETag        string // S3 object ETag if available
-	ContentType string // Content type from storage metadata
+	ETag        string            // S3 object ETag if available
+	ContentType string            // Content type from storage metadata
+	Metadata    map[string]string // S3-compatible user metadata without x-amz-meta- prefix
 }
 
 // Storage defines the interface for file storage operations

@@ -167,6 +167,36 @@ func TestS3Storage_GetFileInfo(t *testing.T) {
 	}
 }
 
+func TestS3Storage_GetFileInfoIncludesMetadata(t *testing.T) {
+	container, storage := setupMinIOContainer(t)
+	defer container.Terminate(context.Background())
+
+	_, err := storage.client.PutObject(context.Background(), &awss3.PutObjectInput{
+		Bucket:      aws.String(testBucket),
+		Key:         aws.String("optimized/photo.jpg"),
+		Body:        strings.NewReader("content"),
+		ContentType: aws.String("image/jpeg"),
+		Metadata: map[string]string{
+			"source-etag":          "source-123",
+			"optimization-profile": "v1-jpeg82-png-best-w1920",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Failed to upload object: %v", err)
+	}
+
+	info, err := storage.GetFileInfo("optimized/photo.jpg")
+	if err != nil {
+		t.Fatalf("GetFileInfo failed: %v", err)
+	}
+	if info.Metadata["source-etag"] != "source-123" {
+		t.Fatalf("Expected source-etag metadata, got %#v", info.Metadata)
+	}
+	if info.Metadata["optimization-profile"] != "v1-jpeg82-png-best-w1920" {
+		t.Fatalf("Expected optimization-profile metadata, got %#v", info.Metadata)
+	}
+}
+
 func TestS3Storage_ReadFile(t *testing.T) {
 	container, storage := setupMinIOContainer(t)
 	defer container.Terminate(context.Background())

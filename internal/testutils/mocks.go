@@ -137,8 +137,6 @@ func (m *MockStorage) FileExists(path string) bool {
 	return exists
 }
 
-
-
 func detectMockContentType(path string) string {
 	ext := strings.ToLower(path[strings.LastIndex(path, ".")+1:])
 	switch ext {
@@ -195,6 +193,13 @@ func (m *MockStorage) AddFile(path string, content []byte, modTime time.Time, et
 		ContentType: detectMockContentType(path),
 	}
 	m.data[path] = content
+}
+
+func (m *MockStorage) AddFileWithMetadata(path string, content []byte, modTime time.Time, etag string, metadata map[string]string) {
+	m.AddFile(path, content, modTime, etag)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.files[path].Metadata = metadata
 }
 
 // AddDirectory adds a directory to the mock storage

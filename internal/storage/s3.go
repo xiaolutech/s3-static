@@ -206,6 +206,7 @@ func fileInfoFromHeadOutput(path string, objInfo *awss3.HeadObjectOutput) *inter
 		IsDir:       false,
 		ETag:        strings.Trim(aws.ToString(objInfo.ETag), `"`),
 		ContentType: aws.ToString(objInfo.ContentType),
+		Metadata:    normalizeMetadata(objInfo.Metadata),
 	}
 }
 
@@ -221,7 +222,19 @@ func fileInfoFromGetOutput(path string, objInfo *awss3.GetObjectOutput) *interfa
 		IsDir:       false,
 		ETag:        strings.Trim(aws.ToString(objInfo.ETag), `"`),
 		ContentType: aws.ToString(objInfo.ContentType),
+		Metadata:    normalizeMetadata(objInfo.Metadata),
 	}
+}
+
+func normalizeMetadata(metadata map[string]string) map[string]string {
+	if len(metadata) == 0 {
+		return nil
+	}
+	result := make(map[string]string, len(metadata))
+	for key, value := range metadata {
+		result[strings.ToLower(key)] = value
+	}
+	return result
 }
 
 type s3ObjectReader struct {
