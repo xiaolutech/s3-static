@@ -15,7 +15,7 @@
 - [x] Task 3: Add alternate bucket storage factory.
 - [x] Task 4: Serve trusted optimized copies from handler.
 - [x] Task 5: Wire optimized storage in `cmd/s3-static/main.go`.
-- [ ] Task 6: Document external optimizer contract in `README.md`.
+- [x] Task 6: Document external optimizer contract in `README.md`.
 
 ---
 

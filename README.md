@@ -10,6 +10,7 @@ A high-performance, S3-compatible static file service built in Go. This service 
 - **ETag Support**: Automatic ETag generation and validation for efficient caching
 - **Conditional Requests**: Support for If-None-Match, If-Modified-Since headers
 - **Streaming Support**: Efficient streaming for large files with HTTP Range request support (206 Partial Content)
+- **Optimized Image Bucket**: Optional trusted fallback to pre-optimized JPEG/PNG copies without changing public URLs
 - **Health Monitoring**: Built-in health check endpoint
 - **Structured Logging**: Configurable log levels with structured output
 - **Docker Support**: Ready-to-use Docker container
@@ -72,6 +73,12 @@ The service is configured via environment variables:
 - `CACHE_STRATEGY` - Caching strategy: `no-cache`, `max-age`, `immutable` (default: immutable)
 - `CACHE_DURATION` - Cache duration for max-age and immutable strategies (default: 8760h)
 
+### Optimized Image Configuration
+- `OPTIMIZED_IMAGE_ENABLED` - Enable trusted optimized-bucket lookup (default: false)
+- `OPTIMIZED_BUCKET_NAME` - Bucket containing optimized copies
+- `OPTIMIZATION_PROFILE` - Required profile metadata value (default: v1-jpeg82-png-best-w1920)
+- `OPTIMIZED_MIN_BYTES` - Minimum source size before optimized lookup (default: 524288)
+
 ## Caching Strategies
 
 The service supports three caching strategies optimized for different use cases:
@@ -103,6 +110,37 @@ export CACHE_DURATION=1h
 - **Warning**: Can cause version mismatch issues with related files
 
 For detailed caching documentation, see [docs/CACHING.md](docs/CACHING.md).
+
+## Optimized Image Bucket
+
+`s3-static` can optionally serve optimized image copies from a second S3-compatible
+bucket without changing public URLs. The optimized bucket must use the same object
+keys as the source bucket.
+
+For a source object:
+
+```text
+bucket: logseq-assets
+key: notes/photo.jpg
+etag: abc123
+```
+
+the external optimizer should write:
+
+```text
+bucket: logseq-assets-optimized
+key: notes/photo.jpg
+x-amz-meta-source-etag: abc123
+x-amz-meta-optimization-profile: v1-jpeg82-png-best-w1920
+```
+
+`s3-static` serves the optimized object only when both metadata values match the
+current source object and configured profile. Otherwise it falls back to the
+source object.
+
+Optimized lookup is only attempted for ordinary `GET` requests for JPEG/PNG images.
+`HEAD`, `GET /{path}?meta=1`, `Range` requests, non-image files, and images smaller
+than `OPTIMIZED_MIN_BYTES` continue to use the source object path directly.
 
 ## API Endpoints
 
