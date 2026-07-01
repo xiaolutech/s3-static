@@ -49,7 +49,11 @@ func main() {
 	}
 
 	// Initialize HTTP handlers
-	fileHandler := handler.NewFileHandlerWithOptimizedStorage(storageInstance, optimizedStorage, cfg, logger)
+	var optimizerTrigger handler.OptimizerTrigger
+	if cfg.OptimizerTriggerURL != "" {
+		optimizerTrigger = handler.NewHTTPOptimizerTrigger(cfg.OptimizerTriggerURL, cfg.OptimizerTriggerTimeout)
+	}
+	fileHandler := handler.NewFileHandlerWithOptimizedStorageAndTrigger(storageInstance, optimizedStorage, optimizerTrigger, cfg, logger)
 	healthHandler := handler.NewHealthHandler(storageInstance, logger)
 
 	// Setup HTTP server

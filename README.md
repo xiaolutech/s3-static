@@ -78,6 +78,8 @@ The service is configured via environment variables:
 - `OPTIMIZED_BUCKET_NAME` - Bucket containing optimized copies
 - `OPTIMIZATION_PROFILE` - Required profile metadata value (default: v1-jpeg82-png-best-w1920)
 - `OPTIMIZED_MIN_BYTES` - Minimum source size before optimized lookup (default: 524288)
+- `OPTIMIZER_TRIGGER_URL` - Optional internal URL that receives `POST /optimize?key=...` when an optimized image is missing, stale, or built with a different profile. Empty disables on-demand triggers.
+- `OPTIMIZER_TRIGGER_TIMEOUT` - Timeout for the non-blocking optimizer trigger HTTP request. Default: `2s`.
 
 ## Caching Strategies
 
@@ -137,6 +139,12 @@ x-amz-meta-optimization-profile: v1-jpeg82-png-best-w1920
 `s3-static` serves the optimized object only when both metadata values match the
 current source object and configured profile. Otherwise it falls back to the
 source object.
+
+When `OPTIMIZER_TRIGGER_URL` is configured, a trusted optimized-bucket miss does
+not change the public response. `s3-static` serves the source object immediately
+and triggers optimization in the background. A subsequent request can serve the
+optimized object after the sidecar writes it with matching `source-etag` and
+`optimization-profile` metadata.
 
 Optimized lookup is only attempted for ordinary `GET` requests for JPEG/PNG images.
 `HEAD`, `GET /{path}?meta=1`, `Range` requests, non-image files, and images smaller

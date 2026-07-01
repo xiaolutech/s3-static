@@ -31,6 +31,7 @@ var requestIDCounter atomic.Uint64
 type FileHandler struct {
 	storage          interfaces.Storage
 	optimizedStorage interfaces.Storage
+	optimizerTrigger OptimizerTrigger
 	config           *config.Config
 	logger           *config.Logger
 }
@@ -42,9 +43,15 @@ func NewFileHandler(storage interfaces.Storage, cfg *config.Config, logger *conf
 
 // NewFileHandlerWithOptimizedStorage creates a new FileHandler instance with an optional optimized image storage backend.
 func NewFileHandlerWithOptimizedStorage(storage interfaces.Storage, optimized interfaces.Storage, cfg *config.Config, logger *config.Logger) *FileHandler {
+	return NewFileHandlerWithOptimizedStorageAndTrigger(storage, optimized, nil, cfg, logger)
+}
+
+// NewFileHandlerWithOptimizedStorageAndTrigger creates a new FileHandler instance with optional optimized storage and optimizer trigger backends.
+func NewFileHandlerWithOptimizedStorageAndTrigger(storage interfaces.Storage, optimized interfaces.Storage, trigger OptimizerTrigger, cfg *config.Config, logger *config.Logger) *FileHandler {
 	return &FileHandler{
 		storage:          storage,
 		optimizedStorage: optimized,
+		optimizerTrigger: trigger,
 		config:           cfg,
 		logger:           logger,
 	}

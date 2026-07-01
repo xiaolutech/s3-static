@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"strconv"
 	"time"
@@ -18,10 +19,12 @@ type Config struct {
 	BucketName string `env:"BUCKET_NAME"`
 
 	// Optimized image serving configuration
-	OptimizedImageEnabled bool   `env:"OPTIMIZED_IMAGE_ENABLED"`
-	OptimizedBucketName   string `env:"OPTIMIZED_BUCKET_NAME"`
-	OptimizationProfile   string `env:"OPTIMIZATION_PROFILE"`
-	OptimizedMinBytes     int64  `env:"OPTIMIZED_MIN_BYTES"`
+	OptimizedImageEnabled   bool          `env:"OPTIMIZED_IMAGE_ENABLED"`
+	OptimizedBucketName     string        `env:"OPTIMIZED_BUCKET_NAME"`
+	OptimizationProfile     string        `env:"OPTIMIZATION_PROFILE"`
+	OptimizedMinBytes       int64         `env:"OPTIMIZED_MIN_BYTES"`
+	OptimizerTriggerURL     string        `env:"OPTIMIZER_TRIGGER_URL"`
+	OptimizerTriggerTimeout time.Duration `env:"OPTIMIZER_TRIGGER_TIMEOUT"`
 
 	// S3 Storage configuration
 	S3Endpoint        string `env:"S3_ENDPOINT"`
@@ -41,19 +44,21 @@ type Config struct {
 // DefaultConfig returns a Config with default values
 func DefaultConfig() *Config {
 	return &Config{
-		Port:                  "8080",
-		Host:                  "0.0.0.0",
-		BasePath:              "./data",
-		BucketName:            "default",
-		OptimizedImageEnabled: false,
-		OptimizedBucketName:   "",
-		OptimizationProfile:   "v1-jpeg82-png-best-w1920",
-		OptimizedMinBytes:     512 * 1024,
-		S3Region:              "us-east-1",
-		S3UseSSL:              true,
-		DefaultCacheDuration:  time.Hour * 24 * 365, // 1 year
-		CacheStrategy:         "immutable",          // Default strategy
-		LogLevel:              "info",
+		Port:                    "8080",
+		Host:                    "0.0.0.0",
+		BasePath:                "./data",
+		BucketName:              "default",
+		OptimizedImageEnabled:   false,
+		OptimizedBucketName:     "",
+		OptimizationProfile:     "v1-jpeg82-png-best-w1920",
+		OptimizedMinBytes:       512 * 1024,
+		OptimizerTriggerURL:     "",
+		OptimizerTriggerTimeout: 2 * time.Second,
+		S3Region:                "us-east-1",
+		S3UseSSL:                true,
+		DefaultCacheDuration:    time.Hour * 24 * 365, // 1 year
+		CacheStrategy:           "immutable",          // Default strategy
+		LogLevel:                "info",
 	}
 }
 
@@ -79,6 +84,9 @@ func LoadFromEnv() (*Config, error) {
 	}
 	if optimizationProfile, ok := os.LookupEnv("OPTIMIZATION_PROFILE"); ok {
 		config.OptimizationProfile = optimizationProfile
+	}
+	if optimizerTriggerURL, ok := os.LookupEnv("OPTIMIZER_TRIGGER_URL"); ok {
+		config.OptimizerTriggerURL = optimizerTriggerURL
 	}
 	if logLevel := os.Getenv("LOG_LEVEL"); logLevel != "" {
 		config.LogLevel = logLevel
@@ -132,6 +140,13 @@ func LoadFromEnv() (*Config, error) {
 		}
 		config.OptimizedMinBytes = optimizedMinBytes
 	}
+	if optimizerTriggerTimeoutStr := os.Getenv("OPTIMIZER_TRIGGER_TIMEOUT"); optimizerTriggerTimeoutStr != "" {
+		duration, err := time.ParseDuration(optimizerTriggerTimeoutStr)
+		if err != nil {
+			return nil, fmt.Errorf("invalid OPTIMIZER_TRIGGER_TIMEOUT format: %w", err)
+		}
+		config.OptimizerTriggerTimeout = duration
+	}
 
 	// Validate configuration
 	if err := config.Validate(); err != nil {
@@ -174,6 +189,19 @@ func (c *Config) Validate() error {
 
 	if c.OptimizationProfile == "" {
 		return fmt.Errorf("OPTIMIZATION_PROFILE cannot be empty")
+	}
+
+	if c.OptimizerTriggerURL != "" {
+		parsed, err := url.Parse(c.OptimizerTriggerURL)
+		if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+			return fmt.Errorf("OPTIMIZER_TRIGGER_URL must be a valid absolute URL, got: %s", c.OptimizerTriggerURL)
+		}
+		if parsed.Scheme != "http" && parsed.Scheme != "https" {
+			return fmt.Errorf("OPTIMIZER_TRIGGER_URL scheme must be http or https, got: %s", parsed.Scheme)
+		}
+		if c.OptimizerTriggerTimeout <= 0 {
+			return fmt.Errorf("OPTIMIZER_TRIGGER_TIMEOUT must be positive, got: %v", c.OptimizerTriggerTimeout)
+		}
 	}
 
 	if c.DefaultCacheDuration <= 0 {
