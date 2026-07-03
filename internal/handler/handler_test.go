@@ -191,6 +191,11 @@ func optimizedTestConfig() *config.Config {
 	return cfg
 }
 
+func addTrustedAVIFFile(storage *mockStorage, source *interfaces.FileInfo, content []byte, modTime time.Time, etag, profile string) {
+	key := avifOptimizedKey(source.Path, profile)
+	storage.addFileWithMetadata(key, content, modTime, etag, "image/avif", trustedAVIFMetadata(source, profile, nil))
+}
+
 func TestFileHandler_UsesS3ETag(t *testing.T) {
 	cfg := config.DefaultConfig()
 	logger := config.NewLogger("info")
@@ -875,30 +880,68 @@ func TestFileHandler_OptimizedImageHit(t *testing.T) {
 
 	sourceTime := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 	optimizedTime := sourceTime.Add(time.Minute)
-	source.addFileWithMetadata("photo.jpg", []byte("original image"), sourceTime, "source-etag", "image/jpeg", nil)
-	optimizedBase.addFileWithMetadata("photo.jpg", []byte("optimized image"), optimizedTime, "optimized-etag", "image/jpeg", map[string]string{
-		optimizedSourceETagMetadata: "source-etag",
-		optimizedProfileMetadata:    cfg.OptimizationProfile,
-	})
+	source.addFileWithMetadata("photo.png", []byte("original image"), sourceTime, "source-etag", "image/png", nil)
+	sourceInfo := source.files["photo.png"]
+	key := avifOptimizedKey(sourceInfo.Path, cfg.OptimizationProfile)
+	optimizedBase.addFileWithMetadata(key, []byte("avif image"), optimizedTime, "optimized-etag", "image/avif", trustedAVIFMetadata(sourceInfo, cfg.OptimizationProfile, nil))
 
-	req := httptest.NewRequest(http.MethodGet, "/photo.jpg", nil)
+	req := httptest.NewRequest(http.MethodGet, "/photo.png", nil)
+	req.Header.Set("Accept", "image/avif,image/webp,image/*,*/*")
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("Expected status 200, got %d", w.Code)
 	}
-	if w.Body.String() != "optimized image" {
-		t.Fatalf("Expected optimized body, got %q", w.Body.String())
+	if w.Body.String() != "avif image" {
+		t.Fatalf("Expected AVIF body, got %q", w.Body.String())
 	}
-	if got := w.Header().Get(optimizedStatusHeader); got != "hit" {
+	if got := w.Header().Get(optimizedStatusHeader); got != "hit; format=avif" {
 		t.Fatalf("Expected optimized hit header, got %q", got)
+	}
+	if got := w.Header().Get("Content-Type"); got != "image/avif" {
+		t.Fatalf("Expected AVIF content type, got %q", got)
+	}
+	if got := w.Header().Get("Vary"); got != "Accept" {
+		t.Fatalf("Expected Vary Accept, got %q", got)
 	}
 	if got := w.Header().Get("ETag"); got != `"optimized-etag"` {
 		t.Fatalf("Expected optimized ETag, got %s", got)
 	}
 	if optimized.openCalls != 1 {
 		t.Fatalf("Expected optimized storage to be opened once, got %d", optimized.openCalls)
+	}
+}
+
+func TestFileHandler_OptimizedImageRequiresAVIFAccept(t *testing.T) {
+	cfg := optimizedTestConfig()
+	logger := config.NewLogger("info")
+	source := newMockStorage()
+	optimizedBase := newMockStorage()
+	optimized := &openFileMockStorage{mockStorage: optimizedBase}
+	handler := NewFileHandlerWithOptimizedStorage(source, optimized, cfg, logger)
+
+	modTime := time.Now().UTC().Truncate(time.Second)
+	source.addFileWithMetadata("photo.png", []byte("original image"), modTime, "source-etag", "image/png", nil)
+	sourceInfo := source.files["photo.png"]
+	key := avifOptimizedKey(sourceInfo.Path, cfg.OptimizationProfile)
+	optimizedBase.addFileWithMetadata(key, []byte("avif image"), modTime, "optimized-etag", "image/avif", trustedAVIFMetadata(sourceInfo, cfg.OptimizationProfile, nil))
+
+	req := httptest.NewRequest(http.MethodGet, "/photo.png", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("Expected status 200, got %d", w.Code)
+	}
+	if w.Body.String() != "original image" {
+		t.Fatalf("Expected original body, got %q", w.Body.String())
+	}
+	if got := w.Header().Get(optimizedStatusHeader); got != "" {
+		t.Fatalf("Expected no optimized status header, got %q", got)
+	}
+	if optimized.openCalls != 0 || optimized.infoCalls != 0 || optimized.readCalls != 0 {
+		t.Fatalf("Expected optimized storage not to be used, got open=%d info=%d read=%d", optimized.openCalls, optimized.infoCalls, optimized.readCalls)
 	}
 }
 
@@ -938,15 +981,18 @@ func TestFileHandler_OptimizedImageFallbackStatuses(t *testing.T) {
 			optimized := &openFileMockStorage{mockStorage: optimizedBase}
 			handler := NewFileHandlerWithOptimizedStorage(source, optimized, cfg, logger)
 
-			source.addFileWithMetadata("photo.jpg", []byte("original image"), sourceTime, "source-etag", "image/jpeg", nil)
+			source.addFileWithMetadata("photo.png", []byte("original image"), sourceTime, "source-etag", "image/png", nil)
+			sourceInfo := source.files["photo.png"]
 			if tt.optimizedETag != "" {
-				optimizedBase.addFileWithMetadata("photo.jpg", []byte("optimized image"), sourceTime.Add(time.Minute), "optimized-etag", "image/jpeg", map[string]string{
+				key := avifOptimizedKey(sourceInfo.Path, cfg.OptimizationProfile)
+				optimizedBase.addFileWithMetadata(key, []byte("avif image"), sourceTime.Add(time.Minute), "optimized-etag", "image/avif", trustedAVIFMetadata(sourceInfo, cfg.OptimizationProfile, map[string]string{
 					optimizedSourceETagMetadata: tt.optimizedETag,
 					optimizedProfileMetadata:    tt.optimizedProfile,
-				})
+				}))
 			}
 
-			req := httptest.NewRequest(http.MethodGet, "/photo.jpg", nil)
+			req := httptest.NewRequest(http.MethodGet, "/photo.png", nil)
+			req.Header.Set("Accept", "image/avif")
 			w := httptest.NewRecorder()
 			handler.ServeHTTP(w, req)
 
@@ -979,12 +1025,10 @@ func TestFileHandler_OptimizedImageSkipsRangeRequest(t *testing.T) {
 
 	modTime := time.Now().UTC().Truncate(time.Second)
 	source.addFileWithMetadata("photo.jpg", []byte("Hello, Range!"), modTime, "source-etag", "image/jpeg", nil)
-	optimizedBase.addFileWithMetadata("photo.jpg", []byte("optimized image"), modTime, "optimized-etag", "image/jpeg", map[string]string{
-		optimizedSourceETagMetadata: "source-etag",
-		optimizedProfileMetadata:    cfg.OptimizationProfile,
-	})
+	addTrustedAVIFFile(optimizedBase, source.files["photo.jpg"], []byte("avif image"), modTime, "optimized-etag", cfg.OptimizationProfile)
 
 	req := httptest.NewRequest(http.MethodGet, "/photo.jpg", nil)
+	req.Header.Set("Accept", "image/avif")
 	req.Header.Set("Range", "bytes=0-4")
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
@@ -1059,12 +1103,10 @@ func TestFileHandler_OptimizedImageSkipsHeadAndMetadata(t *testing.T) {
 			handler := NewFileHandlerWithOptimizedStorage(source, optimized, cfg, logger)
 
 			source.addFileWithMetadata("photo.jpg", []byte("original image"), modTime, "source-etag", "image/jpeg", nil)
-			optimizedBase.addFileWithMetadata("photo.jpg", []byte("optimized image"), modTime, "optimized-etag", "image/jpeg", map[string]string{
-				optimizedSourceETagMetadata: "source-etag",
-				optimizedProfileMetadata:    cfg.OptimizationProfile,
-			})
+			addTrustedAVIFFile(optimizedBase, source.files["photo.jpg"], []byte("avif image"), modTime, "optimized-etag", cfg.OptimizationProfile)
 
 			req := httptest.NewRequest(tt.method, tt.url, nil)
+			req.Header.Set("Accept", "image/avif")
 			w := httptest.NewRecorder()
 			handler.ServeHTTP(w, req)
 
@@ -1089,12 +1131,10 @@ func TestFileHandler_OptimizedImageSkipsNonImage(t *testing.T) {
 
 	modTime := time.Now().UTC().Truncate(time.Second)
 	source.addFileWithMetadata("document.pdf", []byte("original pdf"), modTime, "source-etag", "application/pdf", nil)
-	optimizedBase.addFileWithMetadata("document.pdf", []byte("optimized pdf"), modTime, "optimized-etag", "application/pdf", map[string]string{
-		optimizedSourceETagMetadata: "source-etag",
-		optimizedProfileMetadata:    cfg.OptimizationProfile,
-	})
+	addTrustedAVIFFile(optimizedBase, source.files["document.pdf"], []byte("avif pdf"), modTime, "optimized-etag", cfg.OptimizationProfile)
 
 	req := httptest.NewRequest(http.MethodGet, "/document.pdf", nil)
+	req.Header.Set("Accept", "image/avif")
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
 
@@ -1124,12 +1164,10 @@ func TestFileHandler_OptimizedImageConditionalsUseSourceETag(t *testing.T) {
 		handler := NewFileHandlerWithOptimizedStorage(source, optimized, cfg, logger)
 
 		source.addFileWithMetadata("photo.jpg", []byte("original image"), modTime, "source-etag", "image/jpeg", nil)
-		optimizedBase.addFileWithMetadata("photo.jpg", []byte("optimized image"), modTime, "optimized-etag", "image/jpeg", map[string]string{
-			optimizedSourceETagMetadata: "source-etag",
-			optimizedProfileMetadata:    cfg.OptimizationProfile,
-		})
+		addTrustedAVIFFile(optimizedBase, source.files["photo.jpg"], []byte("avif image"), modTime, "optimized-etag", cfg.OptimizationProfile)
 
 		req := httptest.NewRequest(http.MethodGet, "/photo.jpg", nil)
+		req.Header.Set("Accept", "image/avif")
 		req.Header.Set("If-None-Match", `"optimized-etag"`)
 		w := httptest.NewRecorder()
 		handler.ServeHTTP(w, req)
@@ -1137,10 +1175,10 @@ func TestFileHandler_OptimizedImageConditionalsUseSourceETag(t *testing.T) {
 		if w.Code != http.StatusOK {
 			t.Fatalf("Expected status 200, got %d", w.Code)
 		}
-		if w.Body.String() != "optimized image" {
-			t.Fatalf("Expected optimized body, got %q", w.Body.String())
+		if w.Body.String() != "avif image" {
+			t.Fatalf("Expected AVIF body, got %q", w.Body.String())
 		}
-		if got := w.Header().Get(optimizedStatusHeader); got != "hit" {
+		if got := w.Header().Get(optimizedStatusHeader); got != "hit; format=avif" {
 			t.Fatalf("Expected optimized hit header, got %q", got)
 		}
 	})
@@ -1152,12 +1190,10 @@ func TestFileHandler_OptimizedImageConditionalsUseSourceETag(t *testing.T) {
 		handler := NewFileHandlerWithOptimizedStorage(source, optimized, cfg, logger)
 
 		source.addFileWithMetadata("photo.jpg", []byte("original image"), modTime, "source-etag", "image/jpeg", nil)
-		optimizedBase.addFileWithMetadata("photo.jpg", []byte("optimized image"), modTime, "optimized-etag", "image/jpeg", map[string]string{
-			optimizedSourceETagMetadata: "source-etag",
-			optimizedProfileMetadata:    cfg.OptimizationProfile,
-		})
+		addTrustedAVIFFile(optimizedBase, source.files["photo.jpg"], []byte("avif image"), modTime, "optimized-etag", cfg.OptimizationProfile)
 
 		req := httptest.NewRequest(http.MethodGet, "/photo.jpg", nil)
+		req.Header.Set("Accept", "image/avif")
 		req.Header.Set("If-None-Match", `"source-etag"`)
 		w := httptest.NewRecorder()
 		handler.ServeHTTP(w, req)
@@ -1177,12 +1213,10 @@ func TestFileHandler_OptimizedImageConditionalsUseSourceETag(t *testing.T) {
 		handler := NewFileHandlerWithOptimizedStorage(source, optimized, cfg, logger)
 
 		source.addFileWithMetadata("photo.jpg", []byte("original image"), modTime, "source-etag", "image/jpeg", nil)
-		optimizedBase.addFileWithMetadata("photo.jpg", []byte("optimized image"), modTime, "optimized-etag", "image/jpeg", map[string]string{
-			optimizedSourceETagMetadata: "source-etag",
-			optimizedProfileMetadata:    cfg.OptimizationProfile,
-		})
+		addTrustedAVIFFile(optimizedBase, source.files["photo.jpg"], []byte("avif image"), modTime, "optimized-etag", cfg.OptimizationProfile)
 
 		req := httptest.NewRequest(http.MethodGet, "/photo.jpg", nil)
+		req.Header.Set("Accept", "image/avif")
 		req.Header.Set("If-Match", `"source-etag"`)
 		w := httptest.NewRecorder()
 		handler.ServeHTTP(w, req)
@@ -1190,8 +1224,8 @@ func TestFileHandler_OptimizedImageConditionalsUseSourceETag(t *testing.T) {
 		if w.Code != http.StatusOK {
 			t.Fatalf("Expected status 200, got %d", w.Code)
 		}
-		if w.Body.String() != "optimized image" {
-			t.Fatalf("Expected optimized body, got %q", w.Body.String())
+		if w.Body.String() != "avif image" {
+			t.Fatalf("Expected AVIF body, got %q", w.Body.String())
 		}
 	})
 
@@ -1202,12 +1236,10 @@ func TestFileHandler_OptimizedImageConditionalsUseSourceETag(t *testing.T) {
 		handler := NewFileHandlerWithOptimizedStorage(source, optimized, cfg, logger)
 
 		source.addFileWithMetadata("photo.jpg", []byte("original image"), modTime, "source-etag", "image/jpeg", nil)
-		optimizedBase.addFileWithMetadata("photo.jpg", []byte("optimized image"), modTime, "optimized-etag", "image/jpeg", map[string]string{
-			optimizedSourceETagMetadata: "source-etag",
-			optimizedProfileMetadata:    cfg.OptimizationProfile,
-		})
+		addTrustedAVIFFile(optimizedBase, source.files["photo.jpg"], []byte("avif image"), modTime, "optimized-etag", cfg.OptimizationProfile)
 
 		req := httptest.NewRequest(http.MethodGet, "/photo.jpg", nil)
+		req.Header.Set("Accept", "image/avif")
 		req.Header.Set("If-Match", `"optimized-etag"`)
 		w := httptest.NewRecorder()
 		handler.ServeHTTP(w, req)
@@ -1227,12 +1259,10 @@ func TestFileHandler_OptimizedImageConditionalsUseSourceETag(t *testing.T) {
 		handler := NewFileHandlerWithOptimizedStorage(source, optimized, cfg, logger)
 
 		source.addFileWithMetadata("photo.jpg", []byte("original image"), modTime, "source-etag", "image/jpeg", nil)
-		optimizedBase.addFileWithMetadata("photo.jpg", []byte("optimized image"), modTime, "optimized-etag", "image/jpeg", map[string]string{
-			optimizedSourceETagMetadata: "source-etag",
-			optimizedProfileMetadata:    cfg.OptimizationProfile,
-		})
+		addTrustedAVIFFile(optimizedBase, source.files["photo.jpg"], []byte("avif image"), modTime, "optimized-etag", cfg.OptimizationProfile)
 
 		req := httptest.NewRequest(http.MethodGet, "/photo.jpg", nil)
+		req.Header.Set("Accept", "image/avif")
 		req.Header.Set("If-None-Match", `"other", W/"source-etag"`)
 		w := httptest.NewRecorder()
 		handler.ServeHTTP(w, req)

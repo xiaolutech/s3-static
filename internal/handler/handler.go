@@ -29,10 +29,10 @@ var requestIDCounter atomic.Uint64
 
 // FileHandler handles HTTP requests for static files
 type FileHandler struct {
-	storage          interfaces.Storage
-	optimizedStorage interfaces.Storage
-	config           *config.Config
-	logger           *config.Logger
+	storage           interfaces.Storage
+	optimizedResolver *OptimizedVariantResolver
+	config            *config.Config
+	logger            *config.Logger
 }
 
 // NewFileHandler creates a new FileHandler instance
@@ -42,11 +42,15 @@ func NewFileHandler(storage interfaces.Storage, cfg *config.Config, logger *conf
 
 // NewFileHandlerWithOptimizedStorage creates a new FileHandler instance with an optional optimized image storage backend.
 func NewFileHandlerWithOptimizedStorage(storage interfaces.Storage, optimized interfaces.Storage, cfg *config.Config, logger *config.Logger) *FileHandler {
+	var resolver *OptimizedVariantResolver
+	if optimized != nil {
+		resolver = NewOptimizedVariantResolver(optimized, cfg)
+	}
 	return &FileHandler{
-		storage:          storage,
-		optimizedStorage: optimized,
-		config:           cfg,
-		logger:           logger,
+		storage:           storage,
+		optimizedResolver: resolver,
+		config:            cfg,
+		logger:            logger,
 	}
 }
 
@@ -80,7 +84,7 @@ func (h *FileHandler) handleGetObject(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	var sourceInfo *interfaces.FileInfo
-	if h.hasConditionalHeaders(r) || h.canConsiderOptimized(r) {
+	if h.hasConditionalHeaders(r) || h.optimizedResolver.NeedsSourceInfo(r) {
 		var err error
 		sourceInfo, err = h.getFileInfo(ctx, path)
 		if err != nil {
@@ -98,9 +102,11 @@ func (h *FileHandler) handleGetObject(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if sourceInfo != nil && h.shouldTryOptimized(r, sourceInfo) {
-		optimizedFile, status := h.openTrustedOptimized(ctx, sourceInfo)
-		w.Header().Set(optimizedStatusHeader, status)
+	if sourceInfo != nil && h.optimizedResolver != nil {
+		optimizedFile, status := h.optimizedResolver.Resolve(ctx, r, sourceInfo)
+		if header := status.HeaderValue(); header != "" {
+			w.Header().Set(optimizedStatusHeader, header)
+		}
 		if optimizedFile != nil {
 			defer func() {
 				if optimizedFile.Reader != nil {
@@ -108,6 +114,7 @@ func (h *FileHandler) handleGetObject(w http.ResponseWriter, r *http.Request) {
 				}
 			}()
 
+			w.Header().Set("Vary", "Accept")
 			h.serveOpenedFile(w, r, path, optimizedFile)
 			h.logger.Debug("File served",
 				"path", path,
@@ -259,52 +266,6 @@ func (h *FileHandler) openFileFromStorage(ctx context.Context, backend interface
 		Info:   fileInfo,
 		Reader: reader,
 	}, nil
-}
-
-func (h *FileHandler) canConsiderOptimized(r *http.Request) bool {
-	return h.config.OptimizedImageEnabled &&
-		h.optimizedStorage != nil &&
-		r.Method == http.MethodGet &&
-		!shouldServeMetadata(r) &&
-		r.Header.Get("Range") == ""
-}
-
-func (h *FileHandler) shouldTryOptimized(r *http.Request, source *interfaces.FileInfo) bool {
-	if !h.canConsiderOptimized(r) {
-		return false
-	}
-	if source == nil || source.Size < h.config.OptimizedMinBytes {
-		return false
-	}
-
-	switch contentMediaType(source.ContentType) {
-	case "image/jpeg", "image/png":
-		return true
-	}
-
-	switch strings.ToLower(fileExtension(source.Path)) {
-	case ".jpg", ".jpeg", ".png":
-		return true
-	default:
-		return false
-	}
-}
-
-func (h *FileHandler) openTrustedOptimized(ctx context.Context, source *interfaces.FileInfo) (*interfaces.OpenedFile, string) {
-	optimized, err := h.openFileFromStorage(ctx, h.optimizedStorage, source.Path)
-	if err != nil {
-		return nil, "miss"
-	}
-
-	if optimized.Info.Metadata[optimizedSourceETagMetadata] != source.ETag {
-		_ = optimized.Reader.Close()
-		return nil, "stale"
-	}
-	if optimized.Info.Metadata[optimizedProfileMetadata] != h.config.OptimizationProfile {
-		_ = optimized.Reader.Close()
-		return nil, "profile-mismatch"
-	}
-	return optimized, "hit"
 }
 
 func (h *FileHandler) serveOpenedFile(w http.ResponseWriter, r *http.Request, path string, openedFile *interfaces.OpenedFile) {
