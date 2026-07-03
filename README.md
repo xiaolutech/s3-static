@@ -10,7 +10,7 @@ A high-performance, S3-compatible static file service built in Go. This service 
 - **ETag Support**: Automatic ETag generation and validation for efficient caching
 - **Conditional Requests**: Support for If-None-Match, If-Modified-Since headers
 - **Streaming Support**: Efficient streaming for large files with HTTP Range request support (206 Partial Content)
-- **Optimized Image Bucket**: Optional trusted fallback to pre-optimized JPEG/PNG copies without changing public URLs
+- **Optimized Image Bucket**: Optional trusted AVIF sidecar serving without changing public URLs
 - **Health Monitoring**: Built-in health check endpoint
 - **Structured Logging**: Configurable log levels with structured output
 - **Docker Support**: Ready-to-use Docker container
@@ -113,9 +113,9 @@ For detailed caching documentation, see [docs/CACHING.md](docs/CACHING.md).
 
 ## Optimized Image Bucket
 
-`s3-static` can optionally serve optimized image copies from a second S3-compatible
-bucket without changing public URLs. The optimized bucket must use the same object
-keys as the source bucket.
+`s3-static` can optionally serve AVIF sidecar objects from a second S3-compatible
+bucket without changing public URLs. Optimized lookup is attempted only for ordinary
+`GET` requests whose `Accept` header explicitly includes `image/avif`.
 
 For a source object:
 
@@ -129,18 +129,23 @@ the external optimizer should write:
 
 ```text
 bucket: logseq-assets-optimized
-key: notes/photo.jpg
+key: .s3-image-optimizer/avif/<sha256-source-key>/<optimization-profile>/image.avif
+x-amz-meta-source-key: notes/photo.jpg
 x-amz-meta-source-etag: abc123
-x-amz-meta-optimization-profile: v1-jpeg82-png-best-w1920
+x-amz-meta-optimization-profile: v4-avif-target1m-original
+x-amz-meta-source-content-type: image/jpeg
+x-amz-meta-variant-format: avif
 ```
 
-`s3-static` serves the optimized object only when both metadata values match the
-current source object and configured profile. Otherwise it falls back to the
-source object.
+`s3-static` serves the AVIF object only when the request accepts AVIF and metadata
+matches the current source object and configured profile. The AVIF response includes
+`Content-Type: image/avif`, `Vary: Accept`, and
+`X-S3-Static-Optimized: hit; format=avif`.
 
-Optimized lookup is only attempted for ordinary `GET` requests for JPEG/PNG images.
-`HEAD`, `GET /{path}?meta=1`, `Range` requests, non-image files, and images smaller
-than `OPTIMIZED_MIN_BYTES` continue to use the source object path directly.
+If the request does not advertise AVIF, or if the AVIF object is missing, stale,
+profile-mismatched, unreadable, or has unexpected metadata, the source object is
+served. `HEAD`, `GET /{path}?meta=1`, `Range` requests, non-image files, and images
+smaller than `OPTIMIZED_MIN_BYTES` continue to use the source object path directly.
 
 ## API Endpoints
 
