@@ -118,7 +118,9 @@ For detailed caching documentation, see [docs/CACHING.md](docs/CACHING.md).
 S3-compatible bucket without changing public URLs. Optimized lookup is attempted
 only for ordinary `GET` requests whose `Accept` header explicitly includes
 `image/webp`. When `AVIF_ENABLED=true`, requests that accept `image/avif` try AVIF
-before WebP.
+before WebP. Optimized object keys are derived by appending the selected format to
+the source object key, so `notes/photo.jpg` maps to `notes/photo.jpg.webp` or
+`notes/photo.jpg.avif` in `OPTIMIZED_BUCKET_NAME`.
 
 For a source object:
 
@@ -132,7 +134,7 @@ the external optimizer should write:
 
 ```text
 bucket: logseq-assets-optimized
-key: notes/photo.webp
+key: notes/photo.jpg.webp
 x-amz-meta-source-key: notes/photo.jpg
 x-amz-meta-source-etag: abc123
 x-amz-meta-optimization-profile: v6-webp-q82-original

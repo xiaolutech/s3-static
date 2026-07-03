@@ -5,7 +5,6 @@ import (
 	"io"
 	"mime"
 	"net/http"
-	"path"
 	"strconv"
 	"strings"
 
@@ -173,11 +172,7 @@ func acceptQuality(raw string) float64 {
 }
 
 func optimizedVariantKey(sourceKey, format string) string {
-	ext := path.Ext(sourceKey)
-	if ext == "" {
-		return sourceKey + "." + format
-	}
-	return strings.TrimSuffix(sourceKey, ext) + "." + format
+	return sourceKey + "." + format
 }
 
 func openFileFromBackend(ctx context.Context, backend interfaces.Storage, path string) (*interfaces.OpenedFile, error) {

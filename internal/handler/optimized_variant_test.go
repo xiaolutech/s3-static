@@ -224,8 +224,8 @@ func TestOptimizedVariantResolverRejectsIneligibleSourceWithoutOpeningOptimizedS
 
 func TestOptimizedObjectContractVector(t *testing.T) {
 	const sourceKey = "notes/photo.png"
-	const expectedAVIFKey = "notes/photo.avif"
-	const expectedWebPKey = "notes/photo.webp"
+	const expectedAVIFKey = "notes/photo.png.avif"
+	const expectedWebPKey = "notes/photo.png.webp"
 
 	if got := optimizedVariantKey(sourceKey, optimizedVariantAVIF); got != expectedAVIFKey {
 		t.Fatalf("unexpected AVIF optimized key:\n got: %s\nwant: %s", got, expectedAVIFKey)
