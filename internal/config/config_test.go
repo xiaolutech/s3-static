@@ -27,11 +27,14 @@ func TestDefaultConfig(t *testing.T) {
 	if config.OptimizedBucketName != "" {
 		t.Errorf("Expected default optimized bucket name to be empty, got '%s'", config.OptimizedBucketName)
 	}
-	if config.OptimizationProfile != "v1-jpeg82-png-best-w1920" {
-		t.Errorf("Expected default optimization profile to be 'v1-jpeg82-png-best-w1920', got '%s'", config.OptimizationProfile)
+	if config.OptimizationProfile != "v6-webp-q82-original" {
+		t.Errorf("Expected default optimization profile to be 'v6-webp-q82-original', got '%s'", config.OptimizationProfile)
 	}
 	if config.OptimizedMinBytes != 512*1024 {
 		t.Errorf("Expected default optimized min bytes to be 524288, got %d", config.OptimizedMinBytes)
+	}
+	if config.AVIFEnabled {
+		t.Error("Expected AVIF optimized serving to be disabled by default")
 	}
 	if config.DefaultCacheDuration != time.Hour*24*365 {
 		t.Errorf("Expected default cache duration to be 1 year, got %v", config.DefaultCacheDuration)
@@ -72,6 +75,7 @@ func TestLoadFromEnv_WithEnvironmentVariables(t *testing.T) {
 	os.Setenv("OPTIMIZED_BUCKET_NAME", "optimized-assets")
 	os.Setenv("OPTIMIZATION_PROFILE", "v2-jpeg76-w2560")
 	os.Setenv("OPTIMIZED_MIN_BYTES", "262144")
+	os.Setenv("AVIF_ENABLED", "true")
 	os.Setenv("LOG_LEVEL", "debug")
 
 	config, err := LoadFromEnv()
@@ -106,6 +110,9 @@ func TestLoadFromEnv_WithEnvironmentVariables(t *testing.T) {
 	if config.OptimizedMinBytes != 262144 {
 		t.Errorf("Expected optimized min bytes 262144, got %d", config.OptimizedMinBytes)
 	}
+	if !config.AVIFEnabled {
+		t.Error("Expected AVIF optimized serving to be enabled")
+	}
 	if config.LogLevel != "debug" {
 		t.Errorf("Expected log level 'debug', got '%s'", config.LogLevel)
 	}
@@ -130,6 +137,17 @@ func TestLoadFromEnv_InvalidOptimizedImageEnabled(t *testing.T) {
 	_, err := LoadFromEnv()
 	if err == nil {
 		t.Error("Expected error for invalid optimized image enabled value, got nil")
+	}
+}
+
+func TestLoadFromEnv_InvalidAVIFEnabled(t *testing.T) {
+	clearEnvVars(t)
+
+	os.Setenv("AVIF_ENABLED", "sometimes")
+
+	_, err := LoadFromEnv()
+	if err == nil {
+		t.Error("Expected error for invalid AVIF enabled value, got nil")
 	}
 }
 
@@ -278,7 +296,7 @@ func clearEnvVars(t *testing.T) {
 		"S3_ENDPOINT", "S3_REGION", "S3_ACCESS_KEY_ID", "S3_SECRET_ACCESS_KEY", "S3_USE_SSL",
 		"CACHE_DURATION", "CACHE_STRATEGY",
 		"LOG_LEVEL",
-		"OPTIMIZED_IMAGE_ENABLED", "OPTIMIZED_BUCKET_NAME", "OPTIMIZATION_PROFILE", "OPTIMIZED_MIN_BYTES",
+		"OPTIMIZED_IMAGE_ENABLED", "OPTIMIZED_BUCKET_NAME", "OPTIMIZATION_PROFILE", "OPTIMIZED_MIN_BYTES", "AVIF_ENABLED",
 	}
 
 	original := make(map[string]string, len(envVars))

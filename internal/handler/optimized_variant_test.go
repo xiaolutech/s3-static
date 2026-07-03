@@ -10,7 +10,7 @@ import (
 	"s3-static/pkg/interfaces"
 )
 
-func TestOptimizedVariantResolverRequiresAVIFAccept(t *testing.T) {
+func TestOptimizedVariantResolverRequiresWebPAccept(t *testing.T) {
 	cfg := optimizedTestConfig()
 	source := &interfaces.FileInfo{Path: "photo.png", Size: 1024 * 1024, ETag: "source-etag", ContentType: "image/png"}
 	optimizedBase := newMockStorage()
@@ -39,38 +39,68 @@ func TestOptimizedVariantResolverNeedsSourceInfo(t *testing.T) {
 	resolver := NewOptimizedVariantResolver(newMockStorage(), cfg)
 
 	req := httptest.NewRequest(http.MethodGet, "/photo.png", nil)
-	req.Header.Set("Accept", "image/avif")
+	req.Header.Set("Accept", "image/webp")
 	if !resolver.NeedsSourceInfo(req) {
-		t.Fatal("expected AVIF GET to need source info")
+		t.Fatal("expected WebP GET to need source info")
 	}
 
 	req = httptest.NewRequest(http.MethodGet, "/photo.png", nil)
 	if resolver.NeedsSourceInfo(req) {
-		t.Fatal("expected request without AVIF Accept not to need source info")
+		t.Fatal("expected request without WebP Accept not to need source info")
 	}
 
 	req = httptest.NewRequest(http.MethodGet, "/photo.png", nil)
-	req.Header.Set("Accept", "image/avif")
+	req.Header.Set("Accept", "image/webp")
 	req.Header.Set("Range", "bytes=0-10")
 	if resolver.NeedsSourceInfo(req) {
 		t.Fatal("expected range request not to need optimized source info")
 	}
 }
 
-func TestOptimizedVariantResolverReturnsTrustedAVIF(t *testing.T) {
+func TestOptimizedVariantResolverReturnsTrustedWebPByDefault(t *testing.T) {
 	cfg := optimizedTestConfig()
-	cfg.OptimizationProfile = "v4-avif-target1m-original"
+	cfg.OptimizationProfile = "v6-webp-q82-original"
 	source := &interfaces.FileInfo{Path: "photo.png", Size: 1024 * 1024, ETag: "source-etag", ContentType: "image/png"}
 	optimizedBase := newMockStorage()
 	optimized := &openFileMockStorage{mockStorage: optimizedBase}
-	key := avifOptimizedKey(source.Path, cfg.OptimizationProfile)
-	optimizedBase.addFileWithMetadata(key, []byte("avif image"), time.Now().UTC(), "avif-etag", "image/avif", map[string]string{
+	key := optimizedVariantKey(source.Path, optimizedVariantWebP)
+	optimizedBase.addFileWithMetadata(key, []byte("webp image"), time.Now().UTC(), "webp-etag", "image/webp", map[string]string{
 		optimizedSourceKeyMetadata:         source.Path,
 		optimizedSourceETagMetadata:        source.ETag,
 		optimizedProfileMetadata:           cfg.OptimizationProfile,
 		optimizedSourceContentTypeMetadata: source.ContentType,
-		optimizedVariantFormatMetadata:     optimizedVariantAVIF,
+		optimizedVariantFormatMetadata:     optimizedVariantWebP,
 	})
+	resolver := NewOptimizedVariantResolver(optimized, cfg)
+
+	req := httptest.NewRequest(http.MethodGet, "/photo.png", nil)
+	req.Header.Set("Accept", "image/webp,image/*,*/*")
+	file, status := resolver.Resolve(context.Background(), req, source)
+	defer file.Reader.Close()
+
+	if status.Code != optimizedStatusHit {
+		t.Fatalf("expected hit, got %#v", status)
+	}
+	if status.HeaderValue() != "hit; format=webp" {
+		t.Fatalf("expected hit header value, got %q", status.HeaderValue())
+	}
+	if file.Info.ContentType != "image/webp" {
+		t.Fatalf("expected image/webp, got %q", file.Info.ContentType)
+	}
+	if optimized.openCalls != 1 {
+		t.Fatalf("expected one optimized open, got %d", optimized.openCalls)
+	}
+}
+
+func TestOptimizedVariantResolverReturnsTrustedAVIFWhenEnabled(t *testing.T) {
+	cfg := optimizedTestConfig()
+	cfg.AVIFEnabled = true
+	cfg.OptimizationProfile = "v7-avif-optional"
+	source := &interfaces.FileInfo{Path: "photo.png", Size: 1024 * 1024, ETag: "source-etag", ContentType: "image/png"}
+	optimizedBase := newMockStorage()
+	optimized := &openFileMockStorage{mockStorage: optimizedBase}
+	optimizedBase.addFileWithMetadata(optimizedVariantKey(source.Path, optimizedVariantAVIF), []byte("avif image"), time.Now().UTC(), "avif-etag", "image/avif", trustedAVIFMetadata(source, cfg.OptimizationProfile, nil))
+	optimizedBase.addFileWithMetadata(optimizedVariantKey(source.Path, optimizedVariantWebP), []byte("webp image"), time.Now().UTC(), "webp-etag", "image/webp", trustedVariantMetadata(source, cfg.OptimizationProfile, optimizedVariantWebP, nil))
 	resolver := NewOptimizedVariantResolver(optimized, cfg)
 
 	req := httptest.NewRequest(http.MethodGet, "/photo.png", nil)
@@ -78,11 +108,8 @@ func TestOptimizedVariantResolverReturnsTrustedAVIF(t *testing.T) {
 	file, status := resolver.Resolve(context.Background(), req, source)
 	defer file.Reader.Close()
 
-	if status.Code != optimizedStatusHit {
-		t.Fatalf("expected hit, got %#v", status)
-	}
 	if status.HeaderValue() != "hit; format=avif" {
-		t.Fatalf("expected hit header value, got %q", status.HeaderValue())
+		t.Fatalf("expected AVIF hit header value, got %q", status.HeaderValue())
 	}
 	if file.Info.ContentType != "image/avif" {
 		t.Fatalf("expected image/avif, got %q", file.Info.ContentType)
@@ -94,7 +121,7 @@ func TestOptimizedVariantResolverReturnsTrustedAVIF(t *testing.T) {
 
 func TestOptimizedVariantResolverFallbackStatuses(t *testing.T) {
 	cfg := optimizedTestConfig()
-	cfg.OptimizationProfile = "v4-avif-target1m-original"
+	cfg.OptimizationProfile = "v6-webp-q82-original"
 	source := &interfaces.FileInfo{Path: "photo.png", Size: 1024 * 1024, ETag: "source-etag", ContentType: "image/png"}
 
 	tests := []struct {
@@ -104,43 +131,43 @@ func TestOptimizedVariantResolverFallbackStatuses(t *testing.T) {
 		expectedStatus string
 	}{
 		{
-			name:           "missing avif object",
+			name:           "missing webp object",
 			expectedStatus: optimizedStatusMiss,
 		},
 		{
 			name:        "stale source etag",
-			contentType: "image/avif",
-			metadata: trustedAVIFMetadata(source, cfg.OptimizationProfile, map[string]string{
+			contentType: "image/webp",
+			metadata: trustedVariantMetadata(source, cfg.OptimizationProfile, optimizedVariantWebP, map[string]string{
 				optimizedSourceETagMetadata: "old-etag",
 			}),
 			expectedStatus: optimizedStatusStale,
 		},
 		{
 			name:        "profile mismatch",
-			contentType: "image/avif",
-			metadata: trustedAVIFMetadata(source, cfg.OptimizationProfile, map[string]string{
+			contentType: "image/webp",
+			metadata: trustedVariantMetadata(source, cfg.OptimizationProfile, optimizedVariantWebP, map[string]string{
 				optimizedProfileMetadata: "v3-avif-old",
 			}),
 			expectedStatus: optimizedStatusProfileMismatch,
 		},
 		{
 			name:        "wrong variant format",
-			contentType: "image/avif",
-			metadata: trustedAVIFMetadata(source, cfg.OptimizationProfile, map[string]string{
-				optimizedVariantFormatMetadata: "webp",
+			contentType: "image/webp",
+			metadata: trustedVariantMetadata(source, cfg.OptimizationProfile, optimizedVariantWebP, map[string]string{
+				optimizedVariantFormatMetadata: "avif",
 			}),
 			expectedStatus: optimizedStatusStale,
 		},
 		{
 			name:           "wrong optimized content type",
-			contentType:    "image/webp",
-			metadata:       trustedAVIFMetadata(source, cfg.OptimizationProfile, nil),
+			contentType:    "image/avif",
+			metadata:       trustedVariantMetadata(source, cfg.OptimizationProfile, optimizedVariantWebP, nil),
 			expectedStatus: optimizedStatusStale,
 		},
 		{
 			name:        "wrong source content type metadata",
-			contentType: "image/avif",
-			metadata: trustedAVIFMetadata(source, cfg.OptimizationProfile, map[string]string{
+			contentType: "image/webp",
+			metadata: trustedVariantMetadata(source, cfg.OptimizationProfile, optimizedVariantWebP, map[string]string{
 				optimizedSourceContentTypeMetadata: "image/jpeg",
 			}),
 			expectedStatus: optimizedStatusStale,
@@ -151,14 +178,14 @@ func TestOptimizedVariantResolverFallbackStatuses(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			optimizedBase := newMockStorage()
 			optimized := &openFileMockStorage{mockStorage: optimizedBase}
-			key := avifOptimizedKey(source.Path, cfg.OptimizationProfile)
+			key := optimizedVariantKey(source.Path, optimizedVariantWebP)
 			if tt.metadata != nil {
-				optimizedBase.addFileWithMetadata(key, []byte("avif image"), time.Now().UTC(), "avif-etag", tt.contentType, tt.metadata)
+				optimizedBase.addFileWithMetadata(key, []byte("webp image"), time.Now().UTC(), "webp-etag", tt.contentType, tt.metadata)
 			}
 			resolver := NewOptimizedVariantResolver(optimized, cfg)
 
 			req := httptest.NewRequest(http.MethodGet, "/photo.png", nil)
-			req.Header.Set("Accept", "image/avif")
+			req.Header.Set("Accept", "image/webp")
 			file, status := resolver.Resolve(context.Background(), req, source)
 
 			if file != nil {
@@ -181,7 +208,7 @@ func TestOptimizedVariantResolverRejectsIneligibleSourceWithoutOpeningOptimizedS
 	resolver := NewOptimizedVariantResolver(optimized, cfg)
 
 	req := httptest.NewRequest(http.MethodGet, "/document.pdf", nil)
-	req.Header.Set("Accept", "image/avif")
+	req.Header.Set("Accept", "image/webp")
 	file, status := resolver.Resolve(context.Background(), req, source)
 
 	if file != nil {
@@ -195,13 +222,16 @@ func TestOptimizedVariantResolverRejectsIneligibleSourceWithoutOpeningOptimizedS
 	}
 }
 
-func TestAVIFOptimizedObjectContractVector(t *testing.T) {
+func TestOptimizedObjectContractVector(t *testing.T) {
 	const sourceKey = "notes/photo.png"
-	const profile = "v4-avif-target1m-original"
-	const expectedKey = ".s3-image-optimizer/avif/905b8d229b111ac9fe99f099872a2fcda398a8b06005c36412154b5dd19c85f4/v4-avif-target1m-original/image.avif"
+	const expectedAVIFKey = "notes/photo.avif"
+	const expectedWebPKey = "notes/photo.webp"
 
-	if got := avifOptimizedKey(sourceKey, profile); got != expectedKey {
-		t.Fatalf("unexpected AVIF optimized key:\n got: %s\nwant: %s", got, expectedKey)
+	if got := optimizedVariantKey(sourceKey, optimizedVariantAVIF); got != expectedAVIFKey {
+		t.Fatalf("unexpected AVIF optimized key:\n got: %s\nwant: %s", got, expectedAVIFKey)
+	}
+	if got := optimizedVariantKey(sourceKey, optimizedVariantWebP); got != expectedWebPKey {
+		t.Fatalf("unexpected WebP optimized key:\n got: %s\nwant: %s", got, expectedWebPKey)
 	}
 
 	expectedMetadataKeys := []string{
@@ -226,9 +256,12 @@ func TestAVIFOptimizedObjectContractVector(t *testing.T) {
 	if optimizedVariantAVIF != "avif" {
 		t.Fatalf("variant format = %q, want avif", optimizedVariantAVIF)
 	}
+	if optimizedVariantWebP != "webp" {
+		t.Fatalf("variant format = %q, want webp", optimizedVariantWebP)
+	}
 }
 
-func TestAcceptsAVIF(t *testing.T) {
+func TestAcceptsMediaType(t *testing.T) {
 	tests := []struct {
 		name   string
 		accept string
@@ -244,20 +277,24 @@ func TestAcceptsAVIF(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := acceptsAVIF(tt.accept); got != tt.want {
-				t.Fatalf("acceptsAVIF(%q) = %t, want %t", tt.accept, got, tt.want)
+			if got := acceptsMediaType(tt.accept, "image/avif"); got != tt.want {
+				t.Fatalf("acceptsMediaType(%q, image/avif) = %t, want %t", tt.accept, got, tt.want)
 			}
 		})
 	}
 }
 
 func trustedAVIFMetadata(source *interfaces.FileInfo, profile string, overrides map[string]string) map[string]string {
+	return trustedVariantMetadata(source, profile, optimizedVariantAVIF, overrides)
+}
+
+func trustedVariantMetadata(source *interfaces.FileInfo, profile string, format string, overrides map[string]string) map[string]string {
 	metadata := map[string]string{
 		optimizedSourceKeyMetadata:         source.Path,
 		optimizedSourceETagMetadata:        source.ETag,
 		optimizedProfileMetadata:           profile,
 		optimizedSourceContentTypeMetadata: source.ContentType,
-		optimizedVariantFormatMetadata:     optimizedVariantAVIF,
+		optimizedVariantFormatMetadata:     format,
 	}
 	for key, value := range overrides {
 		metadata[key] = value

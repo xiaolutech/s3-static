@@ -2,11 +2,10 @@ package handler
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"io"
 	"mime"
 	"net/http"
+	"path"
 	"strconv"
 	"strings"
 
@@ -19,6 +18,7 @@ const (
 	optimizedSourceContentTypeMetadata = "source-content-type"
 	optimizedVariantFormatMetadata     = "variant-format"
 	optimizedVariantAVIF               = "avif"
+	optimizedVariantWebP               = "webp"
 
 	optimizedStatusHit             = "hit"
 	optimizedStatusMiss            = "miss"
@@ -60,7 +60,7 @@ func (r *OptimizedVariantResolver) NeedsSourceInfo(req *http.Request) bool {
 		req.Method == http.MethodGet &&
 		!shouldServeMetadata(req) &&
 		req.Header.Get("Range") == "" &&
-		acceptsAVIF(req.Header.Get("Accept"))
+		len(r.acceptedVariants(req)) > 0
 }
 
 func (r *OptimizedVariantResolver) Resolve(ctx context.Context, req *http.Request, source *interfaces.FileInfo) (*interfaces.OpenedFile, VariantStatus) {
@@ -68,21 +68,49 @@ func (r *OptimizedVariantResolver) Resolve(ctx context.Context, req *http.Reques
 		return nil, VariantStatus{Code: optimizedStatusNotAccepted}
 	}
 
-	key := avifOptimizedKey(source.Path, r.config.OptimizationProfile)
-	opened, err := openFileFromBackend(ctx, r.storage, key)
-	if err != nil {
-		return nil, VariantStatus{Code: optimizedStatusMiss}
-	}
-	if !isTrustedAVIFVariant(opened.Info, source, r.config.OptimizationProfile) {
+	status := VariantStatus{Code: optimizedStatusMiss}
+	for _, variant := range r.acceptedVariants(req) {
+		key := optimizedVariantKey(source.Path, variant.Format)
+		opened, err := openFileFromBackend(ctx, r.storage, key)
+		if err != nil {
+			continue
+		}
+		if isTrustedVariant(opened.Info, source, r.config.OptimizationProfile, variant) {
+			return opened, VariantStatus{Code: optimizedStatusHit, Format: variant.Format}
+		}
+
 		_ = opened.Reader.Close()
 		if opened.Info != nil && opened.Info.Metadata != nil {
 			if profile, ok := opened.Info.Metadata[optimizedProfileMetadata]; ok && profile != r.config.OptimizationProfile {
-				return nil, VariantStatus{Code: optimizedStatusProfileMismatch}
+				status = VariantStatus{Code: optimizedStatusProfileMismatch}
+				continue
 			}
 		}
-		return nil, VariantStatus{Code: optimizedStatusStale}
+		if status.Code == optimizedStatusMiss {
+			status = VariantStatus{Code: optimizedStatusStale}
+		}
 	}
-	return opened, VariantStatus{Code: optimizedStatusHit, Format: optimizedVariantAVIF}
+	return nil, status
+}
+
+type optimizedVariant struct {
+	Format      string
+	ContentType string
+}
+
+func (r *OptimizedVariantResolver) acceptedVariants(req *http.Request) []optimizedVariant {
+	if req == nil {
+		return nil
+	}
+	accept := req.Header.Get("Accept")
+	var variants []optimizedVariant
+	if r.config != nil && r.config.AVIFEnabled && acceptsMediaType(accept, "image/avif") {
+		variants = append(variants, optimizedVariant{Format: optimizedVariantAVIF, ContentType: "image/avif"})
+	}
+	if acceptsMediaType(accept, "image/webp") {
+		variants = append(variants, optimizedVariant{Format: optimizedVariantWebP, ContentType: "image/webp"})
+	}
+	return variants
 }
 
 func (r *OptimizedVariantResolver) canResolveSource(source *interfaces.FileInfo) bool {
@@ -103,19 +131,19 @@ func (r *OptimizedVariantResolver) canResolveSource(source *interfaces.FileInfo)
 	}
 }
 
-func isTrustedAVIFVariant(optimized, source *interfaces.FileInfo, profile string) bool {
+func isTrustedVariant(optimized, source *interfaces.FileInfo, profile string, variant optimizedVariant) bool {
 	if optimized == nil || source == nil || optimized.Metadata == nil {
 		return false
 	}
-	return optimized.ContentType == "image/avif" &&
+	return optimized.ContentType == variant.ContentType &&
 		optimized.Metadata[optimizedSourceKeyMetadata] == source.Path &&
 		optimized.Metadata[optimizedSourceETagMetadata] == source.ETag &&
 		optimized.Metadata[optimizedProfileMetadata] == profile &&
 		optimized.Metadata[optimizedSourceContentTypeMetadata] == source.ContentType &&
-		optimized.Metadata[optimizedVariantFormatMetadata] == optimizedVariantAVIF
+		optimized.Metadata[optimizedVariantFormatMetadata] == variant.Format
 }
 
-func acceptsAVIF(accept string) bool {
+func acceptsMediaType(accept string, want string) bool {
 	for _, part := range strings.Split(accept, ",") {
 		part = strings.TrimSpace(part)
 		if part == "" {
@@ -126,7 +154,7 @@ func acceptsAVIF(accept string) bool {
 			mediaType = strings.TrimSpace(strings.Split(part, ";")[0])
 			params = nil
 		}
-		if strings.EqualFold(mediaType, "image/avif") && acceptQuality(params["q"]) > 0 {
+		if strings.EqualFold(mediaType, want) && acceptQuality(params["q"]) > 0 {
 			return true
 		}
 	}
@@ -144,9 +172,12 @@ func acceptQuality(raw string) float64 {
 	return q
 }
 
-func avifOptimizedKey(sourceKey, profile string) string {
-	sum := sha256.Sum256([]byte(sourceKey))
-	return ".s3-image-optimizer/avif/" + hex.EncodeToString(sum[:]) + "/" + profile + "/image.avif"
+func optimizedVariantKey(sourceKey, format string) string {
+	ext := path.Ext(sourceKey)
+	if ext == "" {
+		return sourceKey + "." + format
+	}
+	return strings.TrimSuffix(sourceKey, ext) + "." + format
 }
 
 func openFileFromBackend(ctx context.Context, backend interfaces.Storage, path string) (*interfaces.OpenedFile, error) {

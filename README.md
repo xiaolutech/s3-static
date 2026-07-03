@@ -76,8 +76,9 @@ The service is configured via environment variables:
 ### Optimized Image Configuration
 - `OPTIMIZED_IMAGE_ENABLED` - Enable trusted optimized-bucket lookup (default: false)
 - `OPTIMIZED_BUCKET_NAME` - Bucket containing optimized copies
-- `OPTIMIZATION_PROFILE` - Required profile metadata value (default: v1-jpeg82-png-best-w1920)
+- `OPTIMIZATION_PROFILE` - Required profile metadata value (default: v6-webp-q82-original)
 - `OPTIMIZED_MIN_BYTES` - Minimum source size before optimized lookup (default: 524288)
+- `AVIF_ENABLED` - Prefer trusted AVIF variants before WebP when requests accept AVIF (default: false)
 
 ## Caching Strategies
 
@@ -113,9 +114,11 @@ For detailed caching documentation, see [docs/CACHING.md](docs/CACHING.md).
 
 ## Optimized Image Bucket
 
-`s3-static` can optionally serve AVIF sidecar objects from a second S3-compatible
-bucket without changing public URLs. Optimized lookup is attempted only for ordinary
-`GET` requests whose `Accept` header explicitly includes `image/avif`.
+`s3-static` can optionally serve optimized WebP sidecar objects from a second
+S3-compatible bucket without changing public URLs. Optimized lookup is attempted
+only for ordinary `GET` requests whose `Accept` header explicitly includes
+`image/webp`. When `AVIF_ENABLED=true`, requests that accept `image/avif` try AVIF
+before WebP.
 
 For a source object:
 
@@ -129,21 +132,21 @@ the external optimizer should write:
 
 ```text
 bucket: logseq-assets-optimized
-key: .s3-image-optimizer/avif/<sha256-source-key>/<optimization-profile>/image.avif
+key: notes/photo.webp
 x-amz-meta-source-key: notes/photo.jpg
 x-amz-meta-source-etag: abc123
-x-amz-meta-optimization-profile: v4-avif-target1m-original
+x-amz-meta-optimization-profile: v6-webp-q82-original
 x-amz-meta-source-content-type: image/jpeg
-x-amz-meta-variant-format: avif
+x-amz-meta-variant-format: webp
 ```
 
-`s3-static` serves the AVIF object only when the request accepts AVIF and metadata
-matches the current source object and configured profile. The AVIF response includes
-`Content-Type: image/avif`, `Vary: Accept`, and
-`X-S3-Static-Optimized: hit; format=avif`.
+`s3-static` serves the optimized object only when the request accepts that format
+and metadata matches the current source object and configured profile. The WebP
+response includes `Content-Type: image/webp`, `Vary: Accept`, and
+`X-S3-Static-Optimized: hit; format=webp`.
 
-If the request does not advertise AVIF, or if the AVIF object is missing, stale,
-profile-mismatched, unreadable, or has unexpected metadata, the source object is
+If the request does not advertise a supported optimized format, or if the optimized
+object is missing, stale, profile-mismatched, unreadable, or has unexpected metadata, the source object is
 served. `HEAD`, `GET /{path}?meta=1`, `Range` requests, non-image files, and images
 smaller than `OPTIMIZED_MIN_BYTES` continue to use the source object path directly.
 

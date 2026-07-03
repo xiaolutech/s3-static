@@ -22,6 +22,7 @@ type Config struct {
 	OptimizedBucketName   string `env:"OPTIMIZED_BUCKET_NAME"`
 	OptimizationProfile   string `env:"OPTIMIZATION_PROFILE"`
 	OptimizedMinBytes     int64  `env:"OPTIMIZED_MIN_BYTES"`
+	AVIFEnabled           bool   `env:"AVIF_ENABLED"`
 
 	// S3 Storage configuration
 	S3Endpoint        string `env:"S3_ENDPOINT"`
@@ -47,8 +48,9 @@ func DefaultConfig() *Config {
 		BucketName:            "default",
 		OptimizedImageEnabled: false,
 		OptimizedBucketName:   "",
-		OptimizationProfile:   "v1-jpeg82-png-best-w1920",
+		OptimizationProfile:   "v6-webp-q82-original",
 		OptimizedMinBytes:     512 * 1024,
+		AVIFEnabled:           false,
 		S3Region:              "us-east-1",
 		S3UseSSL:              true,
 		DefaultCacheDuration:  time.Hour * 24 * 365, // 1 year
@@ -115,6 +117,13 @@ func LoadFromEnv() (*Config, error) {
 			return nil, fmt.Errorf("invalid OPTIMIZED_IMAGE_ENABLED format: %w", err)
 		}
 		config.OptimizedImageEnabled = optimizedImageEnabled
+	}
+	if avifEnabledStr := os.Getenv("AVIF_ENABLED"); avifEnabledStr != "" {
+		avifEnabled, err := strconv.ParseBool(avifEnabledStr)
+		if err != nil {
+			return nil, fmt.Errorf("invalid AVIF_ENABLED format: %w", err)
+		}
+		config.AVIFEnabled = avifEnabled
 	}
 
 	// Load duration value

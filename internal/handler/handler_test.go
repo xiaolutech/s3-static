@@ -192,8 +192,13 @@ func optimizedTestConfig() *config.Config {
 }
 
 func addTrustedAVIFFile(storage *mockStorage, source *interfaces.FileInfo, content []byte, modTime time.Time, etag, profile string) {
-	key := avifOptimizedKey(source.Path, profile)
+	key := optimizedVariantKey(source.Path, optimizedVariantAVIF)
 	storage.addFileWithMetadata(key, content, modTime, etag, "image/avif", trustedAVIFMetadata(source, profile, nil))
+}
+
+func addTrustedWebPFile(storage *mockStorage, source *interfaces.FileInfo, content []byte, modTime time.Time, etag, profile string) {
+	key := optimizedVariantKey(source.Path, optimizedVariantWebP)
+	storage.addFileWithMetadata(key, content, modTime, etag, "image/webp", trustedVariantMetadata(source, profile, optimizedVariantWebP, nil))
 }
 
 func TestFileHandler_UsesS3ETag(t *testing.T) {
@@ -882,25 +887,24 @@ func TestFileHandler_OptimizedImageHit(t *testing.T) {
 	optimizedTime := sourceTime.Add(time.Minute)
 	source.addFileWithMetadata("photo.png", []byte("original image"), sourceTime, "source-etag", "image/png", nil)
 	sourceInfo := source.files["photo.png"]
-	key := avifOptimizedKey(sourceInfo.Path, cfg.OptimizationProfile)
-	optimizedBase.addFileWithMetadata(key, []byte("avif image"), optimizedTime, "optimized-etag", "image/avif", trustedAVIFMetadata(sourceInfo, cfg.OptimizationProfile, nil))
+	addTrustedWebPFile(optimizedBase, sourceInfo, []byte("webp image"), optimizedTime, "optimized-etag", cfg.OptimizationProfile)
 
 	req := httptest.NewRequest(http.MethodGet, "/photo.png", nil)
-	req.Header.Set("Accept", "image/avif,image/webp,image/*,*/*")
+	req.Header.Set("Accept", "image/webp,image/*,*/*")
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("Expected status 200, got %d", w.Code)
 	}
-	if w.Body.String() != "avif image" {
-		t.Fatalf("Expected AVIF body, got %q", w.Body.String())
+	if w.Body.String() != "webp image" {
+		t.Fatalf("Expected WebP body, got %q", w.Body.String())
 	}
-	if got := w.Header().Get(optimizedStatusHeader); got != "hit; format=avif" {
+	if got := w.Header().Get(optimizedStatusHeader); got != "hit; format=webp" {
 		t.Fatalf("Expected optimized hit header, got %q", got)
 	}
-	if got := w.Header().Get("Content-Type"); got != "image/avif" {
-		t.Fatalf("Expected AVIF content type, got %q", got)
+	if got := w.Header().Get("Content-Type"); got != "image/webp" {
+		t.Fatalf("Expected WebP content type, got %q", got)
 	}
 	if got := w.Header().Get("Vary"); got != "Accept" {
 		t.Fatalf("Expected Vary Accept, got %q", got)
@@ -913,7 +917,7 @@ func TestFileHandler_OptimizedImageHit(t *testing.T) {
 	}
 }
 
-func TestFileHandler_OptimizedImageRequiresAVIFAccept(t *testing.T) {
+func TestFileHandler_OptimizedImageRequiresWebPAccept(t *testing.T) {
 	cfg := optimizedTestConfig()
 	logger := config.NewLogger("info")
 	source := newMockStorage()
@@ -924,8 +928,7 @@ func TestFileHandler_OptimizedImageRequiresAVIFAccept(t *testing.T) {
 	modTime := time.Now().UTC().Truncate(time.Second)
 	source.addFileWithMetadata("photo.png", []byte("original image"), modTime, "source-etag", "image/png", nil)
 	sourceInfo := source.files["photo.png"]
-	key := avifOptimizedKey(sourceInfo.Path, cfg.OptimizationProfile)
-	optimizedBase.addFileWithMetadata(key, []byte("avif image"), modTime, "optimized-etag", "image/avif", trustedAVIFMetadata(sourceInfo, cfg.OptimizationProfile, nil))
+	addTrustedWebPFile(optimizedBase, sourceInfo, []byte("webp image"), modTime, "optimized-etag", cfg.OptimizationProfile)
 
 	req := httptest.NewRequest(http.MethodGet, "/photo.png", nil)
 	w := httptest.NewRecorder()
@@ -962,7 +965,7 @@ func TestFileHandler_OptimizedImageFallbackStatuses(t *testing.T) {
 		{
 			name:             "stale source etag",
 			optimizedETag:    "old-source-etag",
-			optimizedProfile: "v1-jpeg82-png-best-w1920",
+			optimizedProfile: "v6-webp-q82-original",
 			expectedStatus:   "stale",
 		},
 		{
@@ -984,15 +987,15 @@ func TestFileHandler_OptimizedImageFallbackStatuses(t *testing.T) {
 			source.addFileWithMetadata("photo.png", []byte("original image"), sourceTime, "source-etag", "image/png", nil)
 			sourceInfo := source.files["photo.png"]
 			if tt.optimizedETag != "" {
-				key := avifOptimizedKey(sourceInfo.Path, cfg.OptimizationProfile)
-				optimizedBase.addFileWithMetadata(key, []byte("avif image"), sourceTime.Add(time.Minute), "optimized-etag", "image/avif", trustedAVIFMetadata(sourceInfo, cfg.OptimizationProfile, map[string]string{
+				key := optimizedVariantKey(sourceInfo.Path, optimizedVariantWebP)
+				optimizedBase.addFileWithMetadata(key, []byte("webp image"), sourceTime.Add(time.Minute), "optimized-etag", "image/webp", trustedVariantMetadata(sourceInfo, cfg.OptimizationProfile, optimizedVariantWebP, map[string]string{
 					optimizedSourceETagMetadata: tt.optimizedETag,
 					optimizedProfileMetadata:    tt.optimizedProfile,
 				}))
 			}
 
 			req := httptest.NewRequest(http.MethodGet, "/photo.png", nil)
-			req.Header.Set("Accept", "image/avif")
+			req.Header.Set("Accept", "image/webp")
 			w := httptest.NewRecorder()
 			handler.ServeHTTP(w, req)
 
@@ -1025,10 +1028,10 @@ func TestFileHandler_OptimizedImageSkipsRangeRequest(t *testing.T) {
 
 	modTime := time.Now().UTC().Truncate(time.Second)
 	source.addFileWithMetadata("photo.jpg", []byte("Hello, Range!"), modTime, "source-etag", "image/jpeg", nil)
-	addTrustedAVIFFile(optimizedBase, source.files["photo.jpg"], []byte("avif image"), modTime, "optimized-etag", cfg.OptimizationProfile)
+	addTrustedWebPFile(optimizedBase, source.files["photo.jpg"], []byte("webp image"), modTime, "optimized-etag", cfg.OptimizationProfile)
 
 	req := httptest.NewRequest(http.MethodGet, "/photo.jpg", nil)
-	req.Header.Set("Accept", "image/avif")
+	req.Header.Set("Accept", "image/webp")
 	req.Header.Set("Range", "bytes=0-4")
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
@@ -1103,10 +1106,10 @@ func TestFileHandler_OptimizedImageSkipsHeadAndMetadata(t *testing.T) {
 			handler := NewFileHandlerWithOptimizedStorage(source, optimized, cfg, logger)
 
 			source.addFileWithMetadata("photo.jpg", []byte("original image"), modTime, "source-etag", "image/jpeg", nil)
-			addTrustedAVIFFile(optimizedBase, source.files["photo.jpg"], []byte("avif image"), modTime, "optimized-etag", cfg.OptimizationProfile)
+			addTrustedWebPFile(optimizedBase, source.files["photo.jpg"], []byte("webp image"), modTime, "optimized-etag", cfg.OptimizationProfile)
 
 			req := httptest.NewRequest(tt.method, tt.url, nil)
-			req.Header.Set("Accept", "image/avif")
+			req.Header.Set("Accept", "image/webp")
 			w := httptest.NewRecorder()
 			handler.ServeHTTP(w, req)
 
@@ -1131,10 +1134,10 @@ func TestFileHandler_OptimizedImageSkipsNonImage(t *testing.T) {
 
 	modTime := time.Now().UTC().Truncate(time.Second)
 	source.addFileWithMetadata("document.pdf", []byte("original pdf"), modTime, "source-etag", "application/pdf", nil)
-	addTrustedAVIFFile(optimizedBase, source.files["document.pdf"], []byte("avif pdf"), modTime, "optimized-etag", cfg.OptimizationProfile)
+	addTrustedWebPFile(optimizedBase, source.files["document.pdf"], []byte("webp pdf"), modTime, "optimized-etag", cfg.OptimizationProfile)
 
 	req := httptest.NewRequest(http.MethodGet, "/document.pdf", nil)
-	req.Header.Set("Accept", "image/avif")
+	req.Header.Set("Accept", "image/webp")
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
 
@@ -1164,10 +1167,10 @@ func TestFileHandler_OptimizedImageConditionalsUseSourceETag(t *testing.T) {
 		handler := NewFileHandlerWithOptimizedStorage(source, optimized, cfg, logger)
 
 		source.addFileWithMetadata("photo.jpg", []byte("original image"), modTime, "source-etag", "image/jpeg", nil)
-		addTrustedAVIFFile(optimizedBase, source.files["photo.jpg"], []byte("avif image"), modTime, "optimized-etag", cfg.OptimizationProfile)
+		addTrustedWebPFile(optimizedBase, source.files["photo.jpg"], []byte("webp image"), modTime, "optimized-etag", cfg.OptimizationProfile)
 
 		req := httptest.NewRequest(http.MethodGet, "/photo.jpg", nil)
-		req.Header.Set("Accept", "image/avif")
+		req.Header.Set("Accept", "image/webp")
 		req.Header.Set("If-None-Match", `"optimized-etag"`)
 		w := httptest.NewRecorder()
 		handler.ServeHTTP(w, req)
@@ -1175,10 +1178,10 @@ func TestFileHandler_OptimizedImageConditionalsUseSourceETag(t *testing.T) {
 		if w.Code != http.StatusOK {
 			t.Fatalf("Expected status 200, got %d", w.Code)
 		}
-		if w.Body.String() != "avif image" {
-			t.Fatalf("Expected AVIF body, got %q", w.Body.String())
+		if w.Body.String() != "webp image" {
+			t.Fatalf("Expected WebP body, got %q", w.Body.String())
 		}
-		if got := w.Header().Get(optimizedStatusHeader); got != "hit; format=avif" {
+		if got := w.Header().Get(optimizedStatusHeader); got != "hit; format=webp" {
 			t.Fatalf("Expected optimized hit header, got %q", got)
 		}
 	})
@@ -1190,10 +1193,10 @@ func TestFileHandler_OptimizedImageConditionalsUseSourceETag(t *testing.T) {
 		handler := NewFileHandlerWithOptimizedStorage(source, optimized, cfg, logger)
 
 		source.addFileWithMetadata("photo.jpg", []byte("original image"), modTime, "source-etag", "image/jpeg", nil)
-		addTrustedAVIFFile(optimizedBase, source.files["photo.jpg"], []byte("avif image"), modTime, "optimized-etag", cfg.OptimizationProfile)
+		addTrustedWebPFile(optimizedBase, source.files["photo.jpg"], []byte("webp image"), modTime, "optimized-etag", cfg.OptimizationProfile)
 
 		req := httptest.NewRequest(http.MethodGet, "/photo.jpg", nil)
-		req.Header.Set("Accept", "image/avif")
+		req.Header.Set("Accept", "image/webp")
 		req.Header.Set("If-None-Match", `"source-etag"`)
 		w := httptest.NewRecorder()
 		handler.ServeHTTP(w, req)
@@ -1213,10 +1216,10 @@ func TestFileHandler_OptimizedImageConditionalsUseSourceETag(t *testing.T) {
 		handler := NewFileHandlerWithOptimizedStorage(source, optimized, cfg, logger)
 
 		source.addFileWithMetadata("photo.jpg", []byte("original image"), modTime, "source-etag", "image/jpeg", nil)
-		addTrustedAVIFFile(optimizedBase, source.files["photo.jpg"], []byte("avif image"), modTime, "optimized-etag", cfg.OptimizationProfile)
+		addTrustedWebPFile(optimizedBase, source.files["photo.jpg"], []byte("webp image"), modTime, "optimized-etag", cfg.OptimizationProfile)
 
 		req := httptest.NewRequest(http.MethodGet, "/photo.jpg", nil)
-		req.Header.Set("Accept", "image/avif")
+		req.Header.Set("Accept", "image/webp")
 		req.Header.Set("If-Match", `"source-etag"`)
 		w := httptest.NewRecorder()
 		handler.ServeHTTP(w, req)
@@ -1224,8 +1227,8 @@ func TestFileHandler_OptimizedImageConditionalsUseSourceETag(t *testing.T) {
 		if w.Code != http.StatusOK {
 			t.Fatalf("Expected status 200, got %d", w.Code)
 		}
-		if w.Body.String() != "avif image" {
-			t.Fatalf("Expected AVIF body, got %q", w.Body.String())
+		if w.Body.String() != "webp image" {
+			t.Fatalf("Expected WebP body, got %q", w.Body.String())
 		}
 	})
 
@@ -1236,10 +1239,10 @@ func TestFileHandler_OptimizedImageConditionalsUseSourceETag(t *testing.T) {
 		handler := NewFileHandlerWithOptimizedStorage(source, optimized, cfg, logger)
 
 		source.addFileWithMetadata("photo.jpg", []byte("original image"), modTime, "source-etag", "image/jpeg", nil)
-		addTrustedAVIFFile(optimizedBase, source.files["photo.jpg"], []byte("avif image"), modTime, "optimized-etag", cfg.OptimizationProfile)
+		addTrustedWebPFile(optimizedBase, source.files["photo.jpg"], []byte("webp image"), modTime, "optimized-etag", cfg.OptimizationProfile)
 
 		req := httptest.NewRequest(http.MethodGet, "/photo.jpg", nil)
-		req.Header.Set("Accept", "image/avif")
+		req.Header.Set("Accept", "image/webp")
 		req.Header.Set("If-Match", `"optimized-etag"`)
 		w := httptest.NewRecorder()
 		handler.ServeHTTP(w, req)
@@ -1259,10 +1262,10 @@ func TestFileHandler_OptimizedImageConditionalsUseSourceETag(t *testing.T) {
 		handler := NewFileHandlerWithOptimizedStorage(source, optimized, cfg, logger)
 
 		source.addFileWithMetadata("photo.jpg", []byte("original image"), modTime, "source-etag", "image/jpeg", nil)
-		addTrustedAVIFFile(optimizedBase, source.files["photo.jpg"], []byte("avif image"), modTime, "optimized-etag", cfg.OptimizationProfile)
+		addTrustedWebPFile(optimizedBase, source.files["photo.jpg"], []byte("webp image"), modTime, "optimized-etag", cfg.OptimizationProfile)
 
 		req := httptest.NewRequest(http.MethodGet, "/photo.jpg", nil)
-		req.Header.Set("Accept", "image/avif")
+		req.Header.Set("Accept", "image/webp")
 		req.Header.Set("If-None-Match", `"other", W/"source-etag"`)
 		w := httptest.NewRecorder()
 		handler.ServeHTTP(w, req)
