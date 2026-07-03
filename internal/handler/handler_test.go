@@ -1050,77 +1050,207 @@ func TestFileHandler_OptimizedImageSkipsRangeRequest(t *testing.T) {
 	}
 }
 
-func TestFileHandler_OptimizedImageSkipsHeadAndMetadata(t *testing.T) {
+func TestFileHandler_OptimizedImageMetadataCanForceSource(t *testing.T) {
 	logger := config.NewLogger("info")
 	modTime := time.Now().UTC().Truncate(time.Second)
 
-	tests := []struct {
-		name   string
-		method string
-		url    string
-		assert func(t *testing.T, w *httptest.ResponseRecorder)
-	}{
-		{
-			name:   "head",
-			method: http.MethodHead,
-			url:    "/photo.jpg",
-			assert: func(t *testing.T, w *httptest.ResponseRecorder) {
-				t.Helper()
-				if w.Code != http.StatusOK {
-					t.Fatalf("Expected status 200, got %d", w.Code)
-				}
-				if w.Body.Len() != 0 {
-					t.Fatalf("Expected empty HEAD body, got %q", w.Body.String())
-				}
-				if got := w.Header().Get("ETag"); got != `"source-etag"` {
-					t.Fatalf("Expected source ETag, got %s", got)
-				}
-			},
-		},
-		{
-			name:   "metadata",
-			method: http.MethodGet,
-			url:    "/photo.jpg?meta=1",
-			assert: func(t *testing.T, w *httptest.ResponseRecorder) {
-				t.Helper()
-				if w.Code != http.StatusOK {
-					t.Fatalf("Expected status 200, got %d", w.Code)
-				}
-				var response fileMetadataResponse
-				if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
-					t.Fatalf("decode response: %v", err)
-				}
-				if response.ETag != "source-etag" {
-					t.Fatalf("Expected source ETag in metadata, got %s", response.ETag)
-				}
-			},
-		},
+	cfg := optimizedTestConfig()
+	source := newMockStorage()
+	optimizedBase := newMockStorage()
+	optimized := &openFileMockStorage{mockStorage: optimizedBase}
+	handler := NewFileHandlerWithOptimizedStorage(source, optimized, cfg, logger)
+
+	source.addFileWithMetadata("photo.jpg", []byte("original image"), modTime, "source-etag", "image/jpeg", nil)
+	addTrustedWebPFile(optimizedBase, source.files["photo.jpg"], []byte("webp image"), modTime, "optimized-etag", cfg.OptimizationProfile)
+
+	req := httptest.NewRequest(http.MethodGet, "/photo.jpg?meta=1&variant=source", nil)
+	req.Header.Set("Accept", "image/webp")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("Expected status 200, got %d", w.Code)
+	}
+	var response fileMetadataResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if response.ETag != "source-etag" {
+		t.Fatalf("Expected source ETag in metadata, got %s", response.ETag)
+	}
+	if got := w.Header().Get(optimizedStatusHeader); got != "" {
+		t.Fatalf("Expected no optimized status header, got %q", got)
+	}
+	if optimized.openCalls != 0 || optimized.infoCalls != 0 || optimized.readCalls != 0 {
+		t.Fatalf("Expected optimized storage not to be used, got open=%d info=%d read=%d", optimized.openCalls, optimized.infoCalls, optimized.readCalls)
+	}
+}
+
+func TestFileHandler_HeadDescribesOptimizedRepresentation(t *testing.T) {
+	cfg := optimizedTestConfig()
+	logger := config.NewLogger("info")
+	source := newMockStorage()
+	optimizedBase := newMockStorage()
+	optimized := &openFileMockStorage{mockStorage: optimizedBase}
+	handler := NewFileHandlerWithOptimizedStorage(source, optimized, cfg, logger)
+
+	modTime := time.Now().UTC().Truncate(time.Second)
+	source.addFileWithMetadata("photo.jpg", []byte("original image"), modTime, "source-etag", "image/jpeg", nil)
+	addTrustedWebPFile(optimizedBase, source.files["photo.jpg"], []byte("webp image"), modTime.Add(time.Minute), "optimized-etag", cfg.OptimizationProfile)
+
+	req := httptest.NewRequest(http.MethodHead, "/photo.jpg", nil)
+	req.Header.Set("Accept", "image/webp")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("Expected status 200, got %d", w.Code)
+	}
+	if w.Body.Len() != 0 {
+		t.Fatalf("Expected empty HEAD body, got %q", w.Body.String())
+	}
+	if got := w.Header().Get(optimizedStatusHeader); got != "hit; format=webp" {
+		t.Fatalf("Expected optimized hit header, got %q", got)
+	}
+	if got := w.Header().Get("Content-Type"); got != "image/webp" {
+		t.Fatalf("Expected optimized content type image/webp, got %q", got)
+	}
+	if got := w.Header().Get("ETag"); got != `"optimized-etag"` {
+		t.Fatalf("Expected optimized ETag, got %s", got)
+	}
+	if got := w.Header().Get("Vary"); got != "Accept" {
+		t.Fatalf("Expected Vary: Accept, got %q", got)
+	}
+	if optimized.openCalls != 1 {
+		t.Fatalf("Expected optimized storage to be opened once, got %d", optimized.openCalls)
+	}
+}
+
+func TestFileHandler_MetadataDescribesOptimizedRepresentation(t *testing.T) {
+	cfg := optimizedTestConfig()
+	logger := config.NewLogger("info")
+	source := newMockStorage()
+	optimizedBase := newMockStorage()
+	optimized := &openFileMockStorage{mockStorage: optimizedBase}
+	handler := NewFileHandlerWithOptimizedStorage(source, optimized, cfg, logger)
+
+	modTime := time.Now().UTC().Truncate(time.Second)
+	source.addFileWithMetadata("photo.jpg", []byte("original image"), modTime, "source-etag", "image/jpeg", nil)
+	addTrustedWebPFile(optimizedBase, source.files["photo.jpg"], []byte("webp image"), modTime.Add(time.Minute), "optimized-etag", cfg.OptimizationProfile)
+
+	req := httptest.NewRequest(http.MethodGet, "/photo.jpg?meta=1", nil)
+	req.Header.Set("Accept", "image/webp")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("Expected status 200, got %d", w.Code)
+	}
+	if got := w.Header().Get(optimizedStatusHeader); got != "hit; format=webp" {
+		t.Fatalf("Expected optimized hit header, got %q", got)
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			cfg := optimizedTestConfig()
-			source := newMockStorage()
-			optimizedBase := newMockStorage()
-			optimized := &openFileMockStorage{mockStorage: optimizedBase}
-			handler := NewFileHandlerWithOptimizedStorage(source, optimized, cfg, logger)
+	var response fileMetadataResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if response.Path != "photo.jpg" {
+		t.Fatalf("Expected source URL path in metadata, got %q", response.Path)
+	}
+	if response.ContentType != "image/webp" {
+		t.Fatalf("Expected optimized content type image/webp, got %q", response.ContentType)
+	}
+	if response.Size != int64(len("webp image")) {
+		t.Fatalf("Expected optimized size %d, got %d", len("webp image"), response.Size)
+	}
+	if response.ETag != "optimized-etag" {
+		t.Fatalf("Expected optimized ETag, got %q", response.ETag)
+	}
+	if response.Optimized == nil || !*response.Optimized {
+		t.Fatalf("Expected optimized=true, got %#v", response.Optimized)
+	}
+	if response.VariantFormat != "webp" {
+		t.Fatalf("Expected variant format webp, got %q", response.VariantFormat)
+	}
+	if optimized.openCalls != 1 {
+		t.Fatalf("Expected optimized storage to be opened once, got %d", optimized.openCalls)
+	}
+}
 
-			source.addFileWithMetadata("photo.jpg", []byte("original image"), modTime, "source-etag", "image/jpeg", nil)
-			addTrustedWebPFile(optimizedBase, source.files["photo.jpg"], []byte("webp image"), modTime, "optimized-etag", cfg.OptimizationProfile)
+func TestFileHandler_MetadataCanForceSourceRepresentation(t *testing.T) {
+	cfg := optimizedTestConfig()
+	logger := config.NewLogger("info")
+	source := newMockStorage()
+	optimizedBase := newMockStorage()
+	optimized := &openFileMockStorage{mockStorage: optimizedBase}
+	handler := NewFileHandlerWithOptimizedStorage(source, optimized, cfg, logger)
 
-			req := httptest.NewRequest(tt.method, tt.url, nil)
-			req.Header.Set("Accept", "image/webp")
-			w := httptest.NewRecorder()
-			handler.ServeHTTP(w, req)
+	modTime := time.Now().UTC().Truncate(time.Second)
+	source.addFileWithMetadata("photo.jpg", []byte("original image"), modTime, "source-etag", "image/jpeg", nil)
+	addTrustedWebPFile(optimizedBase, source.files["photo.jpg"], []byte("webp image"), modTime.Add(time.Minute), "optimized-etag", cfg.OptimizationProfile)
 
-			tt.assert(t, w)
-			if got := w.Header().Get(optimizedStatusHeader); got != "" {
-				t.Fatalf("Expected no optimized status header, got %q", got)
-			}
-			if optimized.openCalls != 0 || optimized.infoCalls != 0 || optimized.readCalls != 0 {
-				t.Fatalf("Expected optimized storage not to be used, got open=%d info=%d read=%d", optimized.openCalls, optimized.infoCalls, optimized.readCalls)
-			}
-		})
+	req := httptest.NewRequest(http.MethodGet, "/photo.jpg?meta=1&variant=source", nil)
+	req.Header.Set("Accept", "image/webp")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("Expected status 200, got %d", w.Code)
+	}
+	if got := w.Header().Get(optimizedStatusHeader); got != "" {
+		t.Fatalf("Expected no optimized status header, got %q", got)
+	}
+
+	var response fileMetadataResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if response.ContentType != "image/jpeg" {
+		t.Fatalf("Expected source content type image/jpeg, got %q", response.ContentType)
+	}
+	if response.Size != int64(len("original image")) {
+		t.Fatalf("Expected source size %d, got %d", len("original image"), response.Size)
+	}
+	if response.ETag != "source-etag" {
+		t.Fatalf("Expected source ETag, got %q", response.ETag)
+	}
+	if response.Optimized == nil || *response.Optimized {
+		t.Fatalf("Expected optimized=false, got %#v", response.Optimized)
+	}
+	if response.VariantFormat != "" {
+		t.Fatalf("Expected empty variant format for source metadata, got %q", response.VariantFormat)
+	}
+	if optimized.openCalls != 0 {
+		t.Fatalf("Expected optimized storage not to be opened, got %d", optimized.openCalls)
+	}
+}
+
+func TestFileHandler_MetadataCanForceOriginalAlias(t *testing.T) {
+	cfg := optimizedTestConfig()
+	logger := config.NewLogger("info")
+	source := newMockStorage()
+	optimizedBase := newMockStorage()
+	optimized := &openFileMockStorage{mockStorage: optimizedBase}
+	handler := NewFileHandlerWithOptimizedStorage(source, optimized, cfg, logger)
+
+	modTime := time.Now().UTC().Truncate(time.Second)
+	source.addFileWithMetadata("photo.jpg", []byte("original image"), modTime, "source-etag", "image/jpeg", nil)
+	addTrustedWebPFile(optimizedBase, source.files["photo.jpg"], []byte("webp image"), modTime.Add(time.Minute), "optimized-etag", cfg.OptimizationProfile)
+
+	req := httptest.NewRequest(http.MethodGet, "/photo.jpg?meta=1&variant=original", nil)
+	req.Header.Set("Accept", "image/webp")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	var response fileMetadataResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if response.ETag != "source-etag" {
+		t.Fatalf("Expected original alias to return source ETag, got %q", response.ETag)
+	}
+	if response.Optimized == nil || *response.Optimized {
+		t.Fatalf("Expected optimized=false, got %#v", response.Optimized)
 	}
 }
 
@@ -1376,8 +1506,8 @@ func TestFileHandler_GetMetadataForRasterImages(t *testing.T) {
 			if response.ContentType != tt.contentType {
 				t.Fatalf("Expected %s content type, got %s", tt.contentType, response.ContentType)
 			}
-			if storage.readCalls != 1 {
-				t.Fatalf("Expected one reader call, got %d", storage.readCalls)
+			if storage.openCalls != 1 {
+				t.Fatalf("Expected one open call, got %d", storage.openCalls)
 			}
 		})
 	}

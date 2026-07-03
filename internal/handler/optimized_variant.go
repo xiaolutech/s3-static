@@ -50,14 +50,22 @@ func NewOptimizedVariantResolver(storage interfaces.Storage, cfg *config.Config)
 	return &OptimizedVariantResolver{storage: storage, config: cfg}
 }
 
+func shouldForceSourceVariant(req *http.Request) bool {
+	if req == nil {
+		return false
+	}
+	variant := strings.ToLower(strings.TrimSpace(req.URL.Query().Get("variant")))
+	return variant == "source" || variant == "original"
+}
+
 func (r *OptimizedVariantResolver) NeedsSourceInfo(req *http.Request) bool {
 	return r != nil &&
 		r.storage != nil &&
 		r.config != nil &&
 		r.config.OptimizedImageEnabled &&
 		req != nil &&
-		req.Method == http.MethodGet &&
-		!shouldServeMetadata(req) &&
+		(req.Method == http.MethodGet || req.Method == http.MethodHead) &&
+		!shouldForceSourceVariant(req) &&
 		req.Header.Get("Range") == "" &&
 		len(r.acceptedVariants(req)) > 0
 }

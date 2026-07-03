@@ -116,11 +116,11 @@ For detailed caching documentation, see [docs/CACHING.md](docs/CACHING.md).
 
 `s3-static` can optionally serve optimized WebP sidecar objects from a second
 S3-compatible bucket without changing public URLs. Optimized lookup is attempted
-only for ordinary `GET` requests whose `Accept` header explicitly includes
-`image/webp`. When `AVIF_ENABLED=true`, requests that accept `image/avif` try AVIF
-before WebP. Optimized object keys are derived by appending the selected format to
-the source object key, so `notes/photo.jpg` maps to `notes/photo.jpg.webp` or
-`notes/photo.jpg.avif` in `OPTIMIZED_BUCKET_NAME`.
+for `GET`, `HEAD`, and `GET /{path}?meta=1` requests whose `Accept` header
+explicitly includes `image/webp`. When `AVIF_ENABLED=true`, requests that accept
+`image/avif` try AVIF before WebP. Optimized object keys are derived by appending
+the selected format to the source object key, so `notes/photo.jpg` maps to
+`notes/photo.jpg.webp` or `notes/photo.jpg.avif` in `OPTIMIZED_BUCKET_NAME`.
 
 For a source object:
 
@@ -149,8 +149,14 @@ response includes `Content-Type: image/webp`, `Vary: Accept`, and
 
 If the request does not advertise a supported optimized format, or if the optimized
 object is missing, stale, profile-mismatched, unreadable, or has unexpected metadata, the source object is
-served. `HEAD`, `GET /{path}?meta=1`, `Range` requests, non-image files, and images
-smaller than `OPTIMIZED_MIN_BYTES` continue to use the source object path directly.
+served. `Range` requests, non-image files, and images smaller than
+`OPTIMIZED_MIN_BYTES` continue to use the source object path directly.
+
+`GET /{path}?meta=1` and `HEAD /{path}` follow the same `Accept` negotiation as
+`GET /{path}`. When a trusted optimized variant would be served, metadata and
+headers describe that optimized representation and include `X-S3-Static-Optimized`.
+Use `GET /{path}?meta=1&variant=source` or
+`GET /{path}?meta=1&variant=original` to inspect the original source object.
 
 ## API Endpoints
 
@@ -176,17 +182,20 @@ Serves static files from the configured S3 bucket.
 ### File Metadata
 ```
 GET /{path}?meta=1
+GET /{path}?meta=1&variant=source
 ```
-Returns object metadata as JSON. This is an extension endpoint for callers that need
-media dimensions in addition to standard object headers.
+Returns representation metadata as JSON. This is an extension endpoint for callers
+that need media dimensions in addition to standard object headers.
 
 Use `HEAD /{path}` when you only need standard HTTP metadata such as `Content-Type`,
 `Content-Length`, `ETag`, or `Last-Modified`. Use `GET /{path}?meta=1` when you also
-need parsed metadata such as image or video `width` and `height`.
+need parsed metadata such as image or video `width` and `height`. The metadata
+request follows the same `Accept` negotiation as `GET /{path}`; use
+`variant=source` or `variant=original` to force source-object metadata.
 
 **Behavior:**
 - Reuses the same object path as file access; no separate metadata route is required
-- Returns base metadata for any object
+- Returns base metadata for the representation that would be served
 - Attempts to parse dimensions for supported image and video types
 - Currently supports PNG, JPEG, GIF, WebP, BMP, TIFF, SVG `width`/`height` or `viewBox`,
   and MP4-family video containers such as MP4, M4V, and MOV
@@ -195,12 +204,14 @@ need parsed metadata such as image or video `width` and `height`.
 ```json
 {
   "path": "images/logo.png",
-  "contentType": "image/png",
-  "size": 12345,
-  "etag": "abc123",
-  "lastModified": "2026-05-17T02:00:00Z",
+  "contentType": "image/webp",
+  "size": 6789,
+  "etag": "optimized-etag",
+  "lastModified": "2026-05-17T02:01:00Z",
   "width": 512,
-  "height": 512
+  "height": 512,
+  "optimized": true,
+  "variantFormat": "webp"
 }
 ```
 
@@ -212,6 +223,8 @@ need parsed metadata such as image or video `width` and `height`.
 - `lastModified`: Last modification time in RFC3339 format
 - `width`: Parsed media width, or `null` when unavailable
 - `height`: Parsed media height, or `null` when unavailable
+- `optimized`: `true` when metadata describes a trusted optimized representation, `false` for the source object
+- `variantFormat`: Optimized representation format such as `webp` or `avif`; omitted for source objects
 
 For regular `GET /{path}` and `HEAD /{path}` object responses, parsed dimensions are
 also exposed as S3-compatible user metadata headers when available:

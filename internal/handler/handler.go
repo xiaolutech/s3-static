@@ -160,29 +160,77 @@ func (h *FileHandler) handleGetMetadata(w http.ResponseWriter, r *http.Request) 
 	ctx, cancel := context.WithTimeout(r.Context(), storageRequestTimeout)
 	defer cancel()
 
-	fileInfo, err := h.getFileInfo(ctx, path)
+	sourceInfo, err := h.getFileInfo(ctx, path)
 	if err != nil {
 		h.handleMetadataStorageError(w, err, path)
 		return
 	}
 
-	metadata := fileMetadataResponse{
-		Path:         path,
-		ContentType:  fileInfo.ContentType,
-		Size:         fileInfo.Size,
-		ETag:         fileInfo.ETag,
-		LastModified: fileInfo.ModTime.UTC(),
+	openedFile, optimizedStatus, err := h.openMetadataRepresentation(ctx, r, sourceInfo)
+	if err != nil {
+		h.handleMetadataStorageError(w, err, path)
+		return
+	}
+	defer func() {
+		if openedFile.Reader != nil {
+			openedFile.Reader.Close()
+		}
+	}()
+
+	if header := optimizedStatus.HeaderValue(); header != "" {
+		w.Header().Set(optimizedStatusHeader, header)
 	}
 
-	if shouldProbeMediaDimensions(path, fileInfo.ContentType) {
-		reader, err := h.getFileReader(ctx, path)
-		if err != nil {
-			h.handleMetadataStorageError(w, err, path)
-			return
-		}
-		defer reader.Close()
+	metadata := h.buildMetadataResponse(path, openedFile, optimizedStatus)
 
-		width, height, format, err := extractMediaMetadata(path, fileInfo.ContentType, reader)
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "GET, HEAD")
+	w.Header().Set("Access-Control-Expose-Headers", "Content-Type, "+optimizedStatusHeader)
+	w.WriteHeader(http.StatusOK)
+
+	if err := json.NewEncoder(w).Encode(metadata); err != nil {
+		h.logger.Error("Failed to write metadata response", "path", path, "error", err)
+	}
+}
+
+func (h *FileHandler) openMetadataRepresentation(ctx context.Context, r *http.Request, sourceInfo *interfaces.FileInfo) (*interfaces.OpenedFile, VariantStatus, error) {
+	if sourceInfo != nil && h.optimizedResolver != nil {
+		optimizedFile, status := h.optimizedResolver.Resolve(ctx, r, sourceInfo)
+		if optimizedFile != nil {
+			return optimizedFile, status, nil
+		}
+	}
+
+	if !shouldProbeMediaDimensions(sourceInfo.Path, sourceInfo.ContentType) {
+		return &interfaces.OpenedFile{Info: sourceInfo}, VariantStatus{}, nil
+	}
+
+	openedFile, err := h.openFile(ctx, sourceInfo.Path)
+	return openedFile, VariantStatus{}, err
+}
+
+func (h *FileHandler) buildMetadataResponse(path string, openedFile *interfaces.OpenedFile, status VariantStatus) fileMetadataResponse {
+	fileInfo := openedFile.Info
+	optimized := status.Code == optimizedStatusHit
+	metadata := fileMetadataResponse{
+		Path:          path,
+		ContentType:   fileInfo.ContentType,
+		Size:          fileInfo.Size,
+		ETag:          fileInfo.ETag,
+		LastModified:  fileInfo.ModTime.UTC(),
+		Optimized:     &optimized,
+		VariantFormat: status.Format,
+	}
+
+	if openedFile.Reader != nil && shouldProbeMediaDimensions(path, fileInfo.ContentType) {
+		width, height, format, err := extractMediaMetadata(path, fileInfo.ContentType, openedFile.Reader)
+		if seekErr := seekReaderStart(openedFile.Reader); seekErr != nil {
+			h.logger.Debug("Media metadata probe could not rewind reader",
+				"path", path,
+				"error", seekErr,
+			)
+		}
 		if err != nil {
 			h.logger.Debug("Media metadata probe skipped",
 				"path", path,
@@ -197,15 +245,7 @@ func (h *FileHandler) handleGetMetadata(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("Access-Control-Allow-Methods", "GET, HEAD")
-	w.Header().Set("Access-Control-Expose-Headers", "Content-Type")
-	w.WriteHeader(http.StatusOK)
-
-	if err := json.NewEncoder(w).Encode(metadata); err != nil {
-		h.logger.Error("Failed to write metadata response", "path", path, "error", err)
-	}
+	return metadata
 }
 
 func (h *FileHandler) hasConditionalHeaders(r *http.Request) bool {

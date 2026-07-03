@@ -20,13 +20,15 @@ import (
 )
 
 type fileMetadataResponse struct {
-	Path         string    `json:"path"`
-	ContentType  string    `json:"contentType,omitempty"`
-	Size         int64     `json:"size"`
-	ETag         string    `json:"etag,omitempty"`
-	LastModified time.Time `json:"lastModified"`
-	Width        *int      `json:"width"`
-	Height       *int      `json:"height"`
+	Path          string    `json:"path"`
+	ContentType   string    `json:"contentType,omitempty"`
+	Size          int64     `json:"size"`
+	ETag          string    `json:"etag,omitempty"`
+	LastModified  time.Time `json:"lastModified"`
+	Width         *int      `json:"width"`
+	Height        *int      `json:"height"`
+	Optimized     *bool     `json:"optimized,omitempty"`
+	VariantFormat string    `json:"variantFormat,omitempty"`
 }
 
 const (
