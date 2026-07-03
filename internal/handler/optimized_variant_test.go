@@ -26,8 +26,34 @@ func TestOptimizedVariantResolverRequiresAVIFAccept(t *testing.T) {
 	if status.Code != optimizedStatusNotAccepted {
 		t.Fatalf("expected not-accepted, got %#v", status)
 	}
+	if status.HeaderValue() != "" {
+		t.Fatalf("expected empty header value for not-accepted, got %q", status.HeaderValue())
+	}
 	if optimized.openCalls != 0 {
 		t.Fatalf("expected optimized storage not to be opened, got %d", optimized.openCalls)
+	}
+}
+
+func TestOptimizedVariantResolverNeedsSourceInfo(t *testing.T) {
+	cfg := optimizedTestConfig()
+	resolver := NewOptimizedVariantResolver(newMockStorage(), cfg)
+
+	req := httptest.NewRequest(http.MethodGet, "/photo.png", nil)
+	req.Header.Set("Accept", "image/avif")
+	if !resolver.NeedsSourceInfo(req) {
+		t.Fatal("expected AVIF GET to need source info")
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/photo.png", nil)
+	if resolver.NeedsSourceInfo(req) {
+		t.Fatal("expected request without AVIF Accept not to need source info")
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/photo.png", nil)
+	req.Header.Set("Accept", "image/avif")
+	req.Header.Set("Range", "bytes=0-10")
+	if resolver.NeedsSourceInfo(req) {
+		t.Fatal("expected range request not to need optimized source info")
 	}
 }
 
@@ -145,6 +171,60 @@ func TestOptimizedVariantResolverFallbackStatuses(t *testing.T) {
 				t.Fatalf("expected one optimized open, got %d", optimized.openCalls)
 			}
 		})
+	}
+}
+
+func TestOptimizedVariantResolverRejectsIneligibleSourceWithoutOpeningOptimizedStorage(t *testing.T) {
+	cfg := optimizedTestConfig()
+	source := &interfaces.FileInfo{Path: "document.pdf", Size: 1024 * 1024, ETag: "source-etag", ContentType: "application/pdf"}
+	optimized := &openFileMockStorage{mockStorage: newMockStorage()}
+	resolver := NewOptimizedVariantResolver(optimized, cfg)
+
+	req := httptest.NewRequest(http.MethodGet, "/document.pdf", nil)
+	req.Header.Set("Accept", "image/avif")
+	file, status := resolver.Resolve(context.Background(), req, source)
+
+	if file != nil {
+		t.Fatal("expected no optimized file")
+	}
+	if status.Code != optimizedStatusNotAccepted {
+		t.Fatalf("expected not-accepted, got %#v", status)
+	}
+	if optimized.openCalls != 0 {
+		t.Fatalf("expected optimized storage not to be opened, got %d", optimized.openCalls)
+	}
+}
+
+func TestAVIFOptimizedObjectContractVector(t *testing.T) {
+	const sourceKey = "notes/photo.png"
+	const profile = "v4-avif-target1m-original"
+	const expectedKey = ".s3-image-optimizer/avif/905b8d229b111ac9fe99f099872a2fcda398a8b06005c36412154b5dd19c85f4/v4-avif-target1m-original/image.avif"
+
+	if got := avifOptimizedKey(sourceKey, profile); got != expectedKey {
+		t.Fatalf("unexpected AVIF optimized key:\n got: %s\nwant: %s", got, expectedKey)
+	}
+
+	expectedMetadataKeys := []string{
+		"source-key",
+		"source-etag",
+		"optimization-profile",
+		"source-content-type",
+		"variant-format",
+	}
+	actualMetadataKeys := []string{
+		optimizedSourceKeyMetadata,
+		optimizedSourceETagMetadata,
+		optimizedProfileMetadata,
+		optimizedSourceContentTypeMetadata,
+		optimizedVariantFormatMetadata,
+	}
+	for i := range expectedMetadataKeys {
+		if actualMetadataKeys[i] != expectedMetadataKeys[i] {
+			t.Fatalf("metadata key %d = %q, want %q", i, actualMetadataKeys[i], expectedMetadataKeys[i])
+		}
+	}
+	if optimizedVariantAVIF != "avif" {
+		t.Fatalf("variant format = %q, want avif", optimizedVariantAVIF)
 	}
 }
 

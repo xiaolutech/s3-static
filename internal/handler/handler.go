@@ -30,7 +30,6 @@ var requestIDCounter atomic.Uint64
 // FileHandler handles HTTP requests for static files
 type FileHandler struct {
 	storage           interfaces.Storage
-	optimizedStorage  interfaces.Storage
 	optimizedResolver *OptimizedVariantResolver
 	config            *config.Config
 	logger            *config.Logger
@@ -49,7 +48,6 @@ func NewFileHandlerWithOptimizedStorage(storage interfaces.Storage, optimized in
 	}
 	return &FileHandler{
 		storage:           storage,
-		optimizedStorage:  optimized,
 		optimizedResolver: resolver,
 		config:            cfg,
 		logger:            logger,
@@ -86,7 +84,7 @@ func (h *FileHandler) handleGetObject(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	var sourceInfo *interfaces.FileInfo
-	if h.hasConditionalHeaders(r) || h.canConsiderOptimized(r) {
+	if h.hasConditionalHeaders(r) || h.optimizedResolver.NeedsSourceInfo(r) {
 		var err error
 		sourceInfo, err = h.getFileInfo(ctx, path)
 		if err != nil {
@@ -104,10 +102,10 @@ func (h *FileHandler) handleGetObject(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if sourceInfo != nil && h.shouldTryOptimized(r, sourceInfo) {
+	if sourceInfo != nil && h.optimizedResolver != nil {
 		optimizedFile, status := h.optimizedResolver.Resolve(ctx, r, sourceInfo)
-		if status.Code != optimizedStatusNotAccepted {
-			w.Header().Set(optimizedStatusHeader, status.HeaderValue())
+		if header := status.HeaderValue(); header != "" {
+			w.Header().Set(optimizedStatusHeader, header)
 		}
 		if optimizedFile != nil {
 			defer func() {
@@ -268,36 +266,6 @@ func (h *FileHandler) openFileFromStorage(ctx context.Context, backend interface
 		Info:   fileInfo,
 		Reader: reader,
 	}, nil
-}
-
-func (h *FileHandler) canConsiderOptimized(r *http.Request) bool {
-	return h.config.OptimizedImageEnabled &&
-		h.optimizedResolver != nil &&
-		r.Method == http.MethodGet &&
-		!shouldServeMetadata(r) &&
-		r.Header.Get("Range") == "" &&
-		acceptsAVIF(r.Header.Get("Accept"))
-}
-
-func (h *FileHandler) shouldTryOptimized(r *http.Request, source *interfaces.FileInfo) bool {
-	if !h.canConsiderOptimized(r) {
-		return false
-	}
-	if source == nil || source.Size < h.config.OptimizedMinBytes {
-		return false
-	}
-
-	switch contentMediaType(source.ContentType) {
-	case "image/jpeg", "image/png":
-		return true
-	}
-
-	switch strings.ToLower(fileExtension(source.Path)) {
-	case ".jpg", ".jpeg", ".png":
-		return true
-	default:
-		return false
-	}
 }
 
 func (h *FileHandler) serveOpenedFile(w http.ResponseWriter, r *http.Request, path string, openedFile *interfaces.OpenedFile) {

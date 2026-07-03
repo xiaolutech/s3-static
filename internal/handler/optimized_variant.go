@@ -33,6 +33,9 @@ type VariantStatus struct {
 }
 
 func (s VariantStatus) HeaderValue() string {
+	if s.Code == "" || s.Code == optimizedStatusNotAccepted {
+		return ""
+	}
 	if s.Code == optimizedStatusHit && s.Format != "" {
 		return s.Code + "; format=" + s.Format
 	}
@@ -48,8 +51,20 @@ func NewOptimizedVariantResolver(storage interfaces.Storage, cfg *config.Config)
 	return &OptimizedVariantResolver{storage: storage, config: cfg}
 }
 
+func (r *OptimizedVariantResolver) NeedsSourceInfo(req *http.Request) bool {
+	return r != nil &&
+		r.storage != nil &&
+		r.config != nil &&
+		r.config.OptimizedImageEnabled &&
+		req != nil &&
+		req.Method == http.MethodGet &&
+		!shouldServeMetadata(req) &&
+		req.Header.Get("Range") == "" &&
+		acceptsAVIF(req.Header.Get("Accept"))
+}
+
 func (r *OptimizedVariantResolver) Resolve(ctx context.Context, req *http.Request, source *interfaces.FileInfo) (*interfaces.OpenedFile, VariantStatus) {
-	if r == nil || r.storage == nil || r.config == nil || source == nil || !acceptsAVIF(req.Header.Get("Accept")) {
+	if !r.NeedsSourceInfo(req) || !r.canResolveSource(source) {
 		return nil, VariantStatus{Code: optimizedStatusNotAccepted}
 	}
 
@@ -60,12 +75,32 @@ func (r *OptimizedVariantResolver) Resolve(ctx context.Context, req *http.Reques
 	}
 	if !isTrustedAVIFVariant(opened.Info, source, r.config.OptimizationProfile) {
 		_ = opened.Reader.Close()
-		if opened.Info != nil && opened.Info.Metadata[optimizedProfileMetadata] != r.config.OptimizationProfile {
-			return nil, VariantStatus{Code: optimizedStatusProfileMismatch}
+		if opened.Info != nil && opened.Info.Metadata != nil {
+			if profile, ok := opened.Info.Metadata[optimizedProfileMetadata]; ok && profile != r.config.OptimizationProfile {
+				return nil, VariantStatus{Code: optimizedStatusProfileMismatch}
+			}
 		}
 		return nil, VariantStatus{Code: optimizedStatusStale}
 	}
 	return opened, VariantStatus{Code: optimizedStatusHit, Format: optimizedVariantAVIF}
+}
+
+func (r *OptimizedVariantResolver) canResolveSource(source *interfaces.FileInfo) bool {
+	if source == nil || source.Size < r.config.OptimizedMinBytes {
+		return false
+	}
+
+	switch contentMediaType(source.ContentType) {
+	case "image/jpeg", "image/png":
+		return true
+	}
+
+	switch strings.ToLower(fileExtension(source.Path)) {
+	case ".jpg", ".jpeg", ".png":
+		return true
+	default:
+		return false
+	}
 }
 
 func isTrustedAVIFVariant(optimized, source *interfaces.FileInfo, profile string) bool {
