@@ -53,6 +53,7 @@ pids
 # Temporary files
 tmp/
 temp/
+.worktrees/
 
 # Docker volumes and data
 docker-compose.override.yml
